@@ -43,3 +43,9 @@ In this project, we use the tensorflow MultiWorkerMirroredStrategy to impplement
 <div align=center><img width="300" height="250" src="https://user-images.githubusercontent.com/51089749/180139567-878daec0-cefb-4798-a6d8-a2f0ec793665.png"/></div>
 <p align ="center"> <b>Figure4. Ring All reduce</b></p>
 
+When the distributed training is over, each worker responsible for training will have a complete  model. As shown as **Figure5** .
+<div align=center><img width="300" height="250" src="https://user-images.githubusercontent.com/51089749/180159861-3085aa1a-fafd-4409-a81b-a4cac22450c5.png"/></div>
+<p align ="center"> <b>Figure5. After distributing training schematic</b></p>
+
+
+

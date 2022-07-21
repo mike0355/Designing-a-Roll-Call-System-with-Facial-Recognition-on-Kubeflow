@@ -47,5 +47,34 @@ When the distributed training is over, each worker responsible for training will
 <div align=center><img width="300" height="250" src="https://user-images.githubusercontent.com/51089749/180159861-3085aa1a-fafd-4409-a81b-a4cac22450c5.png"/></div>
 <p align ="center"> <b>Figure5. After distributing training schematic</b></p>
 
+## Kubeflow pipeline
+The Kubeflow pipeline of this project is shown in the **figure6**. The overall process includes face detection, triplet conversion, distributed training, feature value extraction, SVM model training, and finally web serving and KServe model monitoring and testing.
+
+<div align=center><img width="500" height="550" src="https://user-images.githubusercontent.com/51089749/180161740-25a2ea4e-f936-41eb-8aeb-f2fbb3ca6255.png"/></div>
+<p align ="center"> <b>Figure6. Roll call system kubeflow pipeline</b></p>
+
+At this part we will explain the function of each pods.
+
+* **face-detect-pvc:** This pod responsible for providing a common storage space for the pipeline, which can be used to store training files, image data files or weight files.
+
+* **Load data:** This pod is responsible for MTCNN face detection for each image data. If no face is detected, the data will be deleted and the face in the next image will continue to be detected. When all the data is detected After the measurement, the face area will be extracted according to the bounding box coordinates output by the face detection, and each face area will be stored in an empty array as an NPZ file.
+
+* **Convert to  triplet:** This pod will convert the face data into triples, including Anchor, Positive and Negative data.
+
+* **Distributed training worker1:** This pod will be deployed under node1 and implement distributed training.
+* **Distributed training worker2:** This pod will be deployed under node2 and implement distributed training.
+* **Distributed training worker3:** This pod will be deployed under node3 and implement distributed training.
+* **Feature emb:** This pod is responsible for extracting face feature values from all image data through the FaceNet model, and storing all face features in the NPZ file.
+
+* **SVM training:** This pod mainly uses the facial feature values extracted in the previous work stage as training data to train an SVM image classification model and use it in subsequent applications.
+
+* **Facial recognition:** This pod is responsible for providing web services, uses the SVM model to identify each streamed face image, stores the results in MongoDB, and finally displays the attendee list on the front end of the web page.
+
+* **KServe:** This pod is a KServe model inference server. Users can freely input test data in the external environment to this inference server to make predictions. If the prediction is successful, the recognition results of the test images will be returned.
+
+
+
+
+
 
 

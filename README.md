@@ -32,8 +32,8 @@ Before training our data, three components are selected as triplets, as shown in
 
 In the facial recognition we use the SVM image classification method to implement facial recognition, this model is different from FaceNet model,FaceNet model output is 128-dimensional image feature, and the SVM model output is image class result and score,**Figure3** is SVM schematic.
 
-* Decision line: Find a decision line (blue line) in the data that can completely separate the data points, and the sample data must be as far away from the decision line as possible.
-* Decision boundary: The line connecting the data points closest to the decision line is the decision boundary (purple dashed line).
+* **Decision line:** Find a decision line (blue line) in the data that can completely separate the data points, and the sample data must be as far away from the decision line as possible.
+* **Decision boundary:** The line connecting the data points closest to the decision line is the decision boundary (purple dashed line).
 <div align=center><img width="400" height="250" src="https://user-images.githubusercontent.com/51089749/180137944-4ed15fa3-3f8c-4803-9452-c03dd2cd7b4b.png"/></div>
 <p align ="center"> <b>Figure3. SVM　schematic</b></p>
 

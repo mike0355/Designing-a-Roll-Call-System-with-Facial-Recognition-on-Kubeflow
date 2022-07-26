@@ -1,0 +1,1718 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: load-data-2-
+  annotations: {pipelines.kubeflow.org/kfp_sdk_version: 1.4.0, pipelines.kubeflow.org/pipeline_compilation_time: '2022-05-25T05:38:55.079346',
+    pipelines.kubeflow.org/pipeline_spec: '{"description": "load-data.", "name": "load-data"}'}
+  labels: {pipelines.kubeflow.org/kfp_sdk_version: 1.4.0}
+spec:
+  entrypoint: load-data-2
+  templates:
+  - name: convert-to-triplet
+    container:
+      args: [--runtime-string, '{{inputs.parameters.load-data-runtime_string}}', '----output-paths',
+        /tmp/outputs/conv_time/data]
+      command:
+      - sh
+      - -ec
+      - |
+        program_path=$(mktemp)
+        printf "%s" "$0" > "$program_path"
+        python3 -u "$program_path" "$@"
+      - |
+        def convert_to_triplet(runtime_string):
+            import time
+            import numpy as np
+            import random
+            import tensorflow as tf
+            import sys
+            import os
+            from tensorflow.keras import backend as K
+            from itertools import permutations
+            from tqdm import tqdm
+            print(sys.version)
+            sys.path.append("./")
+            sys.path.append("/persist-log")
+            from config import img_size, channel
+            from inception_resnet_v1 import InceptionResNetV1
+            from sklearn.manifold import TSNE
+            print("import done...")
+
+            def generate_triplet_set(x, y, drop_size=0.1, ap_batch=10, n_batch=10, *args, **kwargs):
+                data_xy = tuple([x, y])
+                data_size = 1 - drop_size
+                triplet_train_pairs = []
+                triplet_test_pairs = []
+
+                for data_class in tqdm(sorted(set(data_xy[1]))):
+
+                    same_class_idx = np.where((data_xy[1] == data_class))[0]
+                    diff_class_idx = np.where(data_xy[1] != data_class)[0]
+                    # Generating Anchor-Positive pairs
+                    A_P_pairs = random.sample(
+                        list(permutations(same_class_idx, 2)), k=ap_batch)
+
+                    li = list(range(100))
+                    n = ap_batch
+                    #Neg_idx = random.sample(li, n if len(li) > n else len(li))
+                    Neg_idx = random.sample(list(diff_class_idx), k=n_batch)
+                    # train set
+                    A_P_len = len(A_P_pairs)
+                    Neg_len = len(Neg_idx)
+                    for ap in A_P_pairs[:int(A_P_len * data_size)]:
+                        Anchor = data_xy[0][ap[0]]
+                        Positive = data_xy[0][ap[1]]
+                        for n in Neg_idx:
+                            Negative = data_xy[0][n]
+                            triplet_train_pairs.append([Anchor, Positive, Negative])
+
+                    # test set
+                    for ap in A_P_pairs[int(A_P_len * data_size):]:
+                        Anchor = data_xy[0][ap[0]]
+                        Positive = data_xy[0][ap[1]]
+                        for n in Neg_idx:
+                            Negative = data_xy[0][n]
+                            triplet_test_pairs.append([Anchor, Positive, Negative])
+
+                return np.array(triplet_train_pairs), np.array(triplet_test_pairs)
+
+            conv_time_start = time.time()
+            tf.compat.v1.disable_eager_execution()
+            K.clear_session()
+            faces_data_dir = os.path.join("faces_data_new_data.npz")
+            data = np.load(faces_data_dir)
+            x_train, y_train = data['arr_0'], data['arr_1']
+            x_train = x_train.reshape((-1, img_size, img_size))
+            print("[Train] image:{}, label:{}".format(x_train.shape, y_train.shape))
+            x_train_flat = x_train.reshape(-1, (img_size ** 2) * channel)
+            tsne = TSNE()
+            train_tsne_embeds = tsne.fit_transform(x_train_flat[:3500])
+            X_train, X_test = generate_triplet_set(
+                x_train, y_train, ap_pairs=60, an_pairs=60, testsize=0.2)
+            print(X_train.shape, X_test.shape)
+            np.savez_compressed('triplet_data.npz', X_train, X_test)
+            print("susscess")
+            conv_time_end = time.time()
+            conv_time = (conv_time_end-conv_time_start)/60
+            conv_time = str(conv_time)
+            return[conv_time]
+
+        def _serialize_str(str_value: str) -> str:
+            if not isinstance(str_value, str):
+                raise TypeError('Value "{}" has type "{}" instead of str.'.format(str(str_value), str(type(str_value))))
+            return str_value
+
+        import argparse
+        _parser = argparse.ArgumentParser(prog='Convert to triplet', description='')
+        _parser.add_argument("--runtime-string", dest="runtime_string", type=str, required=True, default=argparse.SUPPRESS)
+        _parser.add_argument("----output-paths", dest="_output_paths", type=str, nargs=1)
+        _parsed_args = vars(_parser.parse_args())
+        _output_files = _parsed_args.pop("_output_paths", [])
+
+        _outputs = convert_to_triplet(**_parsed_args)
+
+        _output_serializers = [
+            _serialize_str,
+
+        ]
+
+        import os
+        for idx, output_file in enumerate(_output_files):
+            try:
+                os.makedirs(os.path.dirname(output_file))
+            except OSError:
+                pass
+            with open(output_file, 'w') as f:
+                f.write(_output_serializers[idx](_outputs[idx]))
+      image: mike0355/face-recognition-0523:latest
+      volumeMounts:
+      - {mountPath: /persist-log, name: face-detect-pvc}
+    inputs:
+      parameters:
+      - {name: face-detect-pvc-name}
+      - {name: load-data-runtime_string}
+    outputs:
+      parameters:
+      - name: convert-to-triplet-conv_time
+        valueFrom: {path: /tmp/outputs/conv_time/data}
+      artifacts:
+      - {name: convert-to-triplet-conv_time, path: /tmp/outputs/conv_time/data}
+    volumes:
+    - name: face-detect-pvc
+      persistentVolumeClaim: {claimName: '{{inputs.parameters.face-detect-pvc-name}}'}
+    metadata:
+      annotations: {pipelines.kubeflow.org/component_spec: '{"implementation": {"container":
+          {"args": ["--runtime-string", {"inputValue": "runtime_string"}, "----output-paths",
+          {"outputPath": "conv_time"}], "command": ["sh", "-ec", "program_path=$(mktemp)\nprintf
+          \"%s\" \"$0\" > \"$program_path\"\npython3 -u \"$program_path\" \"$@\"\n",
+          "def convert_to_triplet(runtime_string):\n    import time\n    import numpy
+          as np\n    import random\n    import tensorflow as tf\n    import sys\n    import
+          os\n    from tensorflow.keras import backend as K\n    from itertools import
+          permutations\n    from tqdm import tqdm\n    print(sys.version)\n    sys.path.append(\"./\")\n    sys.path.append(\"/persist-log\")\n    from
+          config import img_size, channel\n    from inception_resnet_v1 import InceptionResNetV1\n    from
+          sklearn.manifold import TSNE\n    print(\"import done...\")\n\n    def generate_triplet_set(x,
+          y, drop_size=0.1, ap_batch=10, n_batch=10, *args, **kwargs):\n        data_xy
+          = tuple([x, y])\n        data_size = 1 - drop_size\n        triplet_train_pairs
+          = []\n        triplet_test_pairs = []\n\n        for data_class in tqdm(sorted(set(data_xy[1]))):\n\n            same_class_idx
+          = np.where((data_xy[1] == data_class))[0]\n            diff_class_idx =
+          np.where(data_xy[1] != data_class)[0]\n            # Generating Anchor-Positive
+          pairs\n            A_P_pairs = random.sample(\n                list(permutations(same_class_idx,
+          2)), k=ap_batch)\n\n            li = list(range(100))\n            n = ap_batch\n            #Neg_idx
+          = random.sample(li, n if len(li) > n else len(li))\n            Neg_idx
+          = random.sample(list(diff_class_idx), k=n_batch)\n            # train set\n            A_P_len
+          = len(A_P_pairs)\n            Neg_len = len(Neg_idx)\n            for ap
+          in A_P_pairs[:int(A_P_len * data_size)]:\n                Anchor = data_xy[0][ap[0]]\n                Positive
+          = data_xy[0][ap[1]]\n                for n in Neg_idx:\n                    Negative
+          = data_xy[0][n]\n                    triplet_train_pairs.append([Anchor,
+          Positive, Negative])\n\n            # test set\n            for ap in A_P_pairs[int(A_P_len
+          * data_size):]:\n                Anchor = data_xy[0][ap[0]]\n                Positive
+          = data_xy[0][ap[1]]\n                for n in Neg_idx:\n                    Negative
+          = data_xy[0][n]\n                    triplet_test_pairs.append([Anchor,
+          Positive, Negative])\n\n        return np.array(triplet_train_pairs), np.array(triplet_test_pairs)\n\n    conv_time_start
+          = time.time()\n    tf.compat.v1.disable_eager_execution()\n    K.clear_session()\n    faces_data_dir
+          = os.path.join(\"faces_data_new_data.npz\")\n    data = np.load(faces_data_dir)\n    x_train,
+          y_train = data[''arr_0''], data[''arr_1'']\n    x_train = x_train.reshape((-1,
+          img_size, img_size))\n    print(\"[Train] image:{}, label:{}\".format(x_train.shape,
+          y_train.shape))\n    x_train_flat = x_train.reshape(-1, (img_size ** 2)
+          * channel)\n    tsne = TSNE()\n    train_tsne_embeds = tsne.fit_transform(x_train_flat[:3500])\n    X_train,
+          X_test = generate_triplet_set(\n        x_train, y_train, ap_pairs=60, an_pairs=60,
+          testsize=0.2)\n    print(X_train.shape, X_test.shape)\n    np.savez_compressed(''triplet_data.npz'',
+          X_train, X_test)\n    print(\"susscess\")\n    conv_time_end = time.time()\n    conv_time
+          = (conv_time_end-conv_time_start)/60\n    conv_time = str(conv_time)\n    return[conv_time]\n\ndef
+          _serialize_str(str_value: str) -> str:\n    if not isinstance(str_value,
+          str):\n        raise TypeError(''Value \"{}\" has type \"{}\" instead of
+          str.''.format(str(str_value), str(type(str_value))))\n    return str_value\n\nimport
+          argparse\n_parser = argparse.ArgumentParser(prog=''Convert to triplet'',
+          description='''')\n_parser.add_argument(\"--runtime-string\", dest=\"runtime_string\",
+          type=str, required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"----output-paths\",
+          dest=\"_output_paths\", type=str, nargs=1)\n_parsed_args = vars(_parser.parse_args())\n_output_files
+          = _parsed_args.pop(\"_output_paths\", [])\n\n_outputs = convert_to_triplet(**_parsed_args)\n\n_output_serializers
+          = [\n    _serialize_str,\n\n]\n\nimport os\nfor idx, output_file in enumerate(_output_files):\n    try:\n        os.makedirs(os.path.dirname(output_file))\n    except
+          OSError:\n        pass\n    with open(output_file, ''w'') as f:\n        f.write(_output_serializers[idx](_outputs[idx]))\n"],
+          "image": "mike0355/face-recognition-0523:latest"}}, "inputs": [{"name":
+          "runtime_string", "type": "String"}], "name": "Convert to triplet", "outputs":
+          [{"name": "conv_time", "type": "String"}]}', pipelines.kubeflow.org/component_ref: '{}',
+        pipelines.kubeflow.org/arguments.parameters: '{"runtime_string": "{{inputs.parameters.load-data-runtime_string}}"}'}
+  - name: distributed-training-work1
+    container:
+      args: [--conv-time, '{{inputs.parameters.convert-to-triplet-conv_time}}', '----output-paths',
+        /tmp/outputs/train_time_str1/data]
+      command:
+      - sh
+      - -ec
+      - |
+        program_path=$(mktemp)
+        printf "%s" "$0" > "$program_path"
+        python3 -u "$program_path" "$@"
+      - "def Distributed_training_work1(conv_time):\n    import numpy as np\n    import\
+        \ sys\n    import time\n    import tensorflow as tf\n    import json\n   \
+        \ import os\n    sys.path.append(\"./\")\n    sys.path.append(\"/persist-log\"\
+        )\n    sys.path.append(\"/configfile\")\n    from config import img_size,\
+        \ channel, faces_data_dir, FREEZE_LAYERS, classify, facenet_weight_path\n\
+        \    from inception_resnet_v1 import InceptionResNetV1\n    from itertools\
+        \ import permutations\n    from tqdm import tqdm\n    from tensorflow.keras\
+        \ import backend as K\n    from sklearn.manifold import TSNE\n    #load data\
+        \ from pvc in the container\n    data = np.load('triplet-data.npz')\n    X_train,\
+        \ X_test = data['arr_0'], data['arr_1']\n\n    train_time_start = time.time()\n\
+        \    def training_model(in_shape,freeze_layers,weights_path):\n\n        def\
+        \ create_base_network(in_dims,freeze_layers,weights_path):\n            model\
+        \ = InceptionResNetV1(input_shape=in_dims, weights_path=weights_path)\n  \
+        \          print('layer length: ', len(model.layers))\n            for layer\
+        \ in model.layers[:freeze_layers]:\n                layer.trainable = False\n\
+        \            for layer in model.layers[freeze_layers:]:\n                layer.trainable\
+        \ = True\n            return model\n\n        def triplet_loss(y_true,y_pred,alpha=0.4):\n\
+        \            total_lenght = y_pred.shape.as_list()[-1]\n            anchor\
+        \ = y_pred[:, 0:int(total_lenght * 1 / 3)]\n            positive = y_pred[:,\
+        \ int(total_lenght * 1 / 3):int(total_lenght * 2 / 3)]\n            negative\
+        \ = y_pred[:, int(total_lenght * 2 / 3):int(total_lenght * 3 / 3)]\n     \
+        \       # distance between the anchor and the positive\n            pos_dist\
+        \ = K.sum(K.square(anchor - positive), axis=1)\n            # distance between\
+        \ the anchor and the negative\n            neg_dist = K.sum(K.square(anchor\
+        \ - negative), axis=1)\n            # compute loss\n            basic_loss\
+        \ = pos_dist - neg_dist + alpha\n            loss = K.maximum(basic_loss,\
+        \ 0.0)\n            return loss\n        # define triplet input layers\n \
+        \       anchor_input = tf.keras.layers.Input(in_shape, name='anchor_input')\n\
+        \        positive_input = tf.keras.layers.Input(in_shape, name='positive_input')\n\
+        \        negative_input = tf.keras.layers.Input(in_shape, name='negative_input')\n\
+        \        Shared_DNN = create_base_network(in_shape, freeze_layers, weights_path)\n\
+        \        # Shared_DNN.summary()\n        # encoded inputs\n        encoded_anchor\
+        \ = Shared_DNN(anchor_input)\n        encoded_positive = Shared_DNN(positive_input)\n\
+        \        encoded_negative = Shared_DNN(negative_input)\n        # output\n\
+        \        merged_vector = tf.keras.layers.concatenate([encoded_anchor, encoded_positive,\
+        \ encoded_negative],axis=-1,name='merged_layer')\n        model = tf.keras.Model(inputs=[anchor_input,\
+        \ positive_input, negative_input], outputs=merged_vector)\n        model.compile(\n\
+        \            optimizer=adam_optim,\n            loss=triplet_loss,\n     \
+        \   )\n        return model\n\n    os.environ['TF_CONFIG'] = json.dumps({'cluster':\
+        \ {'worker': [\"pipeline-worker-0:3001\",\"pipeline-worker-1:3001\",\"pipeline-worker-2:3001\"\
+        ]},'task': {'type': 'worker', 'index': 0}})\n    #os.environ['TF_CONFIG']\
+        \ = json.dumps({'cluster': {'worker': [\"pipeline-worker-1:3000\",\"pipeline-worker-2:3000\"\
+        ,\"pipeline-worker-3:3000\"]},'task': {'type': 'worker', 'index': 0}})\n \
+        \   #os.environ['TF_CONFIG'] = json.dumps({'cluster': {'worker': [\"pipeline-worker-0:3001\"\
+        ]},'task': {'type': 'worker', 'index': 0}})\n\n    strategy = tf.distribute.experimental.MultiWorkerMirroredStrategy(\n\
+        \        tf.distribute.experimental.CollectiveCommunication.RING)\n    NUM_WORKERS\
+        \ = strategy.num_replicas_in_sync\n    print('=================\\r\\nWorkers:\
+        \ ' + str(NUM_WORKERS) + '\\r\\n=================\\r\\n')\n    #learn_rate\
+        \ = 0.02 + NUM_WORKERS * 2\n    #learn_rate = 0.5 + NUM_WORKERS * 8  10mins\
+        \ loss 88  descrease\n    #learn_rate = 5 + NUM_WORKERS * 15\n    learn_rate\
+        \ = 0.00001 + NUM_WORKERS * 0.0000016\n    adam_optim = tf.keras.optimizers.Adam(lr=learn_rate)\n\
+        \    batch_size = 32* NUM_WORKERS\n    model_path='/persist-log/test_model_0523.h5'\n\
+        \    print(model_path)\n    callbacks = [tf.keras.callbacks.ModelCheckpoint(model_path,\
+        \ save_weights_only=True, verbose=1)]\n    #X_train=np.array(X_train)\n  \
+        \  #print(type(X_train))\n    with strategy.scope():\n        Anchor = X_train[:,\
+        \ 0, :].reshape(-1, img_size, img_size, channel)\n        Positive = X_train[:,\
+        \ 1, :].reshape(-1, img_size, img_size, channel)\n        Negative = X_train[:,\
+        \ 2, :].reshape(-1, img_size, img_size, channel)\n        Y_dummy = np.empty(Anchor.shape[0])\n\
+        \        model = training_model((img_size, img_size, channel), FREEZE_LAYERS,\
+        \ facenet_weight_path)\n\n    model.fit(x=[Anchor, Positive, Negative],\n\
+        \        y=Y_dummy,\n        # Anchor_test = X_test[:, 0, :].reshape(-1, img_size,\
+        \ img_size, channel)\n        # Positive_test = X_test[:, 1, :].reshape(-1,\
+        \ img_size, img_size, channel)\n        # Negative_test = X_test[:, 2, :].reshape(-1,\
+        \ img_size, img_size, channel)\n        # Y_dummy = np.empty(Anchor.shape[0])\n\
+        \        # Y_dummy2 = np.empty((Anchor_test.shape[0], 1))\n        # validation_data=([Anchor_test,Positive_test,Negative_test],Y_dummy2),\n\
+        \        # validation_split=0.2,\n        batch_size=batch_size,  # old setting:\
+        \ 32\n        # steps_per_epoch=(X_train.shape[0] // batch_size) + 1,\n  \
+        \      epochs=10,#-------------------------------------------------------epoch\n\
+        \        callbacks=callbacks\n        )  \n\n    train_time_end = time.time()\n\
+        \    train_time = (train_time_end - train_time_start)/60\n    train_time_str1\
+        \ = str(train_time)\n\n    print('execution time = ',train_time_str1)\n  \
+        \  return [train_time_str1]\n\ndef _serialize_str(str_value: str) -> str:\n\
+        \    if not isinstance(str_value, str):\n        raise TypeError('Value \"\
+        {}\" has type \"{}\" instead of str.'.format(str(str_value), str(type(str_value))))\n\
+        \    return str_value\n\nimport argparse\n_parser = argparse.ArgumentParser(prog='Distributed\
+        \ training work1', description='')\n_parser.add_argument(\"--conv-time\",\
+        \ dest=\"conv_time\", type=str, required=True, default=argparse.SUPPRESS)\n\
+        _parser.add_argument(\"----output-paths\", dest=\"_output_paths\", type=str,\
+        \ nargs=1)\n_parsed_args = vars(_parser.parse_args())\n_output_files = _parsed_args.pop(\"\
+        _output_paths\", [])\n\n_outputs = Distributed_training_work1(**_parsed_args)\n\
+        \n_output_serializers = [\n    _serialize_str,\n\n]\n\nimport os\nfor idx,\
+        \ output_file in enumerate(_output_files):\n    try:\n        os.makedirs(os.path.dirname(output_file))\n\
+        \    except OSError:\n        pass\n    with open(output_file, 'w') as f:\n\
+        \        f.write(_output_serializers[idx](_outputs[idx]))\n"
+      image: mike0355/face-recognition-0523:latest
+      ports:
+      - {containerPort: 3001, hostPort: 3001}
+      volumeMounts:
+      - {mountPath: /persist-log, name: face-detect-pvc}
+    inputs:
+      parameters:
+      - {name: convert-to-triplet-conv_time}
+      - {name: face-detect-pvc-name}
+    outputs:
+      parameters:
+      - name: distributed-training-work1-train_time_str1
+        valueFrom: {path: /tmp/outputs/train_time_str1/data}
+      artifacts:
+      - {name: distributed-training-work1-train_time_str1, path: /tmp/outputs/train_time_str1/data}
+    nodeSelector: {disktype: worker-1}
+    metadata:
+      labels: {pod-name: work-0}
+      annotations: {pipelines.kubeflow.org/component_spec: '{"implementation": {"container":
+          {"args": ["--conv-time", {"inputValue": "conv_time"}, "----output-paths",
+          {"outputPath": "train_time_str1"}], "command": ["sh", "-ec", "program_path=$(mktemp)\nprintf
+          \"%s\" \"$0\" > \"$program_path\"\npython3 -u \"$program_path\" \"$@\"\n",
+          "def Distributed_training_work1(conv_time):\n    import numpy as np\n    import
+          sys\n    import time\n    import tensorflow as tf\n    import json\n    import
+          os\n    sys.path.append(\"./\")\n    sys.path.append(\"/persist-log\")\n    sys.path.append(\"/configfile\")\n    from
+          config import img_size, channel, faces_data_dir, FREEZE_LAYERS, classify,
+          facenet_weight_path\n    from inception_resnet_v1 import InceptionResNetV1\n    from
+          itertools import permutations\n    from tqdm import tqdm\n    from tensorflow.keras
+          import backend as K\n    from sklearn.manifold import TSNE\n    #load data
+          from pvc in the container\n    data = np.load(''triplet-data.npz'')\n    X_train,
+          X_test = data[''arr_0''], data[''arr_1'']\n\n    train_time_start = time.time()\n    def
+          training_model(in_shape,freeze_layers,weights_path):\n\n        def create_base_network(in_dims,freeze_layers,weights_path):\n            model
+          = InceptionResNetV1(input_shape=in_dims, weights_path=weights_path)\n            print(''layer
+          length: '', len(model.layers))\n            for layer in model.layers[:freeze_layers]:\n                layer.trainable
+          = False\n            for layer in model.layers[freeze_layers:]:\n                layer.trainable
+          = True\n            return model\n\n        def triplet_loss(y_true,y_pred,alpha=0.4):\n            total_lenght
+          = y_pred.shape.as_list()[-1]\n            anchor = y_pred[:, 0:int(total_lenght
+          * 1 / 3)]\n            positive = y_pred[:, int(total_lenght * 1 / 3):int(total_lenght
+          * 2 / 3)]\n            negative = y_pred[:, int(total_lenght * 2 / 3):int(total_lenght
+          * 3 / 3)]\n            # distance between the anchor and the positive\n            pos_dist
+          = K.sum(K.square(anchor - positive), axis=1)\n            # distance between
+          the anchor and the negative\n            neg_dist = K.sum(K.square(anchor
+          - negative), axis=1)\n            # compute loss\n            basic_loss
+          = pos_dist - neg_dist + alpha\n            loss = K.maximum(basic_loss,
+          0.0)\n            return loss\n        # define triplet input layers\n        anchor_input
+          = tf.keras.layers.Input(in_shape, name=''anchor_input'')\n        positive_input
+          = tf.keras.layers.Input(in_shape, name=''positive_input'')\n        negative_input
+          = tf.keras.layers.Input(in_shape, name=''negative_input'')\n        Shared_DNN
+          = create_base_network(in_shape, freeze_layers, weights_path)\n        #
+          Shared_DNN.summary()\n        # encoded inputs\n        encoded_anchor =
+          Shared_DNN(anchor_input)\n        encoded_positive = Shared_DNN(positive_input)\n        encoded_negative
+          = Shared_DNN(negative_input)\n        # output\n        merged_vector =
+          tf.keras.layers.concatenate([encoded_anchor, encoded_positive, encoded_negative],axis=-1,name=''merged_layer'')\n        model
+          = tf.keras.Model(inputs=[anchor_input, positive_input, negative_input],
+          outputs=merged_vector)\n        model.compile(\n            optimizer=adam_optim,\n            loss=triplet_loss,\n        )\n        return
+          model\n\n    os.environ[''TF_CONFIG''] = json.dumps({''cluster'': {''worker'':
+          [\"pipeline-worker-0:3001\",\"pipeline-worker-1:3001\",\"pipeline-worker-2:3001\"]},''task'':
+          {''type'': ''worker'', ''index'': 0}})\n    #os.environ[''TF_CONFIG''] =
+          json.dumps({''cluster'': {''worker'': [\"pipeline-worker-1:3000\",\"pipeline-worker-2:3000\",\"pipeline-worker-3:3000\"]},''task'':
+          {''type'': ''worker'', ''index'': 0}})\n    #os.environ[''TF_CONFIG''] =
+          json.dumps({''cluster'': {''worker'': [\"pipeline-worker-0:3001\"]},''task'':
+          {''type'': ''worker'', ''index'': 0}})\n\n    strategy = tf.distribute.experimental.MultiWorkerMirroredStrategy(\n        tf.distribute.experimental.CollectiveCommunication.RING)\n    NUM_WORKERS
+          = strategy.num_replicas_in_sync\n    print(''=================\\r\\nWorkers:
+          '' + str(NUM_WORKERS) + ''\\r\\n=================\\r\\n'')\n    #learn_rate
+          = 0.02 + NUM_WORKERS * 2\n    #learn_rate = 0.5 + NUM_WORKERS * 8  10mins
+          loss 88  descrease\n    #learn_rate = 5 + NUM_WORKERS * 15\n    learn_rate
+          = 0.00001 + NUM_WORKERS * 0.0000016\n    adam_optim = tf.keras.optimizers.Adam(lr=learn_rate)\n    batch_size
+          = 32* NUM_WORKERS\n    model_path=''/persist-log/test_model_0523.h5''\n    print(model_path)\n    callbacks
+          = [tf.keras.callbacks.ModelCheckpoint(model_path, save_weights_only=True,
+          verbose=1)]\n    #X_train=np.array(X_train)\n    #print(type(X_train))\n    with
+          strategy.scope():\n        Anchor = X_train[:, 0, :].reshape(-1, img_size,
+          img_size, channel)\n        Positive = X_train[:, 1, :].reshape(-1, img_size,
+          img_size, channel)\n        Negative = X_train[:, 2, :].reshape(-1, img_size,
+          img_size, channel)\n        Y_dummy = np.empty(Anchor.shape[0])\n        model
+          = training_model((img_size, img_size, channel), FREEZE_LAYERS, facenet_weight_path)\n\n    model.fit(x=[Anchor,
+          Positive, Negative],\n        y=Y_dummy,\n        # Anchor_test = X_test[:,
+          0, :].reshape(-1, img_size, img_size, channel)\n        # Positive_test
+          = X_test[:, 1, :].reshape(-1, img_size, img_size, channel)\n        # Negative_test
+          = X_test[:, 2, :].reshape(-1, img_size, img_size, channel)\n        # Y_dummy
+          = np.empty(Anchor.shape[0])\n        # Y_dummy2 = np.empty((Anchor_test.shape[0],
+          1))\n        # validation_data=([Anchor_test,Positive_test,Negative_test],Y_dummy2),\n        #
+          validation_split=0.2,\n        batch_size=batch_size,  # old setting: 32\n        #
+          steps_per_epoch=(X_train.shape[0] // batch_size) + 1,\n        epochs=10,#-------------------------------------------------------epoch\n        callbacks=callbacks\n        )  \n\n    train_time_end
+          = time.time()\n    train_time = (train_time_end - train_time_start)/60\n    train_time_str1
+          = str(train_time)\n\n    print(''execution time = '',train_time_str1)\n    return
+          [train_time_str1]\n\ndef _serialize_str(str_value: str) -> str:\n    if
+          not isinstance(str_value, str):\n        raise TypeError(''Value \"{}\"
+          has type \"{}\" instead of str.''.format(str(str_value), str(type(str_value))))\n    return
+          str_value\n\nimport argparse\n_parser = argparse.ArgumentParser(prog=''Distributed
+          training work1'', description='''')\n_parser.add_argument(\"--conv-time\",
+          dest=\"conv_time\", type=str, required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"----output-paths\",
+          dest=\"_output_paths\", type=str, nargs=1)\n_parsed_args = vars(_parser.parse_args())\n_output_files
+          = _parsed_args.pop(\"_output_paths\", [])\n\n_outputs = Distributed_training_work1(**_parsed_args)\n\n_output_serializers
+          = [\n    _serialize_str,\n\n]\n\nimport os\nfor idx, output_file in enumerate(_output_files):\n    try:\n        os.makedirs(os.path.dirname(output_file))\n    except
+          OSError:\n        pass\n    with open(output_file, ''w'') as f:\n        f.write(_output_serializers[idx](_outputs[idx]))\n"],
+          "image": "mike0355/face-recognition-0523:latest"}}, "inputs": [{"name":
+          "conv_time", "type": "String"}], "name": "Distributed training work1", "outputs":
+          [{"name": "train_time_str1", "type": "String"}]}', pipelines.kubeflow.org/component_ref: '{}',
+        pipelines.kubeflow.org/arguments.parameters: '{"conv_time": "{{inputs.parameters.convert-to-triplet-conv_time}}"}'}
+    volumes:
+    - name: face-detect-pvc
+      persistentVolumeClaim: {claimName: '{{inputs.parameters.face-detect-pvc-name}}'}
+  - name: distributed-training-work2
+    container:
+      args: [--conv-time, '{{inputs.parameters.convert-to-triplet-conv_time}}', '----output-paths',
+        /tmp/outputs/train_time_str2/data]
+      command:
+      - sh
+      - -ec
+      - |
+        program_path=$(mktemp)
+        printf "%s" "$0" > "$program_path"
+        python3 -u "$program_path" "$@"
+      - "def Distributed_training_work2(conv_time):\n    import numpy as np\n    import\
+        \ sys\n    import time\n    import tensorflow as tf\n    import json\n   \
+        \ import os\n    sys.path.append(\"./\")\n    sys.path.append(\"/persist-log\"\
+        )\n    sys.path.append(\"/configfile\")\n    from config import img_size,\
+        \ channel, faces_data_dir, FREEZE_LAYERS, classify, facenet_weight_path\n\
+        \    from inception_resnet_v1 import InceptionResNetV1\n    from itertools\
+        \ import permutations\n    from tqdm import tqdm\n    from tensorflow.keras\
+        \ import backend as K\n    from sklearn.manifold import TSNE\n    #load data\
+        \ from pvc in the container\n    data = np.load('triplet-data.npz')\n    X_train,\
+        \ X_test = data['arr_0'], data['arr_1']\n\n    train_time_start = time.time()\n\
+        \    def training_model(in_shape,freeze_layers,weights_path):\n\n        def\
+        \ create_base_network(in_dims,freeze_layers,weights_path):\n            model\
+        \ = InceptionResNetV1(input_shape=in_dims, weights_path=weights_path)\n  \
+        \          print('layer length: ', len(model.layers))\n            for layer\
+        \ in model.layers[:freeze_layers]:\n                layer.trainable = False\n\
+        \            for layer in model.layers[freeze_layers:]:\n                layer.trainable\
+        \ = True\n            return model\n\n        def triplet_loss(y_true,y_pred,alpha=0.4):\n\
+        \            total_lenght = y_pred.shape.as_list()[-1]\n            anchor\
+        \ = y_pred[:, 0:int(total_lenght * 1 / 3)]\n            positive = y_pred[:,\
+        \ int(total_lenght * 1 / 3):int(total_lenght * 2 / 3)]\n            negative\
+        \ = y_pred[:, int(total_lenght * 2 / 3):int(total_lenght * 3 / 3)]\n     \
+        \       # distance between the anchor and the positive\n            pos_dist\
+        \ = K.sum(K.square(anchor - positive), axis=1)\n            # distance between\
+        \ the anchor and the negative\n            neg_dist = K.sum(K.square(anchor\
+        \ - negative), axis=1)\n            # compute loss\n            basic_loss\
+        \ = pos_dist - neg_dist + alpha\n            loss = K.maximum(basic_loss,\
+        \ 0.0)\n            return loss\n        # define triplet input layers\n \
+        \       anchor_input = tf.keras.layers.Input(in_shape, name='anchor_input')\n\
+        \        positive_input = tf.keras.layers.Input(in_shape, name='positive_input')\n\
+        \        negative_input = tf.keras.layers.Input(in_shape, name='negative_input')\n\
+        \        Shared_DNN = create_base_network(in_shape, freeze_layers, weights_path)\n\
+        \        # Shared_DNN.summary()\n        # encoded inputs\n        encoded_anchor\
+        \ = Shared_DNN(anchor_input)\n        encoded_positive = Shared_DNN(positive_input)\n\
+        \        encoded_negative = Shared_DNN(negative_input)\n        # output\n\
+        \        merged_vector = tf.keras.layers.concatenate([encoded_anchor, encoded_positive,\
+        \ encoded_negative],axis=-1,name='merged_layer')\n        model = tf.keras.Model(inputs=[anchor_input,\
+        \ positive_input, negative_input], outputs=merged_vector)\n        model.compile(\n\
+        \            optimizer=adam_optim,\n            loss=triplet_loss,\n     \
+        \   )\n        return model\n\n    os.environ['TF_CONFIG'] = json.dumps({'cluster':\
+        \ {'worker': [\"pipeline-worker-0:3001\",\"pipeline-worker-1:3001\",\"pipeline-worker-2:3001\"\
+        ]},'task': {'type': 'worker', 'index': 1}})\n    #os.environ['TF_CONFIG']\
+        \ = json.dumps({'cluster': {'worker': [\"pipeline-worker-1:3000\",\"pipeline-worker-2:3000\"\
+        ,\"pipeline-worker-3:3000\"]},'task': {'type': 'worker', 'index': 1}})\n \
+        \   #os.environ['TF_CONFIG'] = json.dumps({'cluster': {'worker': [\"pipeline-worker-1:3000\"\
+        ]},'task': {'type': 'worker', 'index': 0}})\n\n    strategy = tf.distribute.experimental.MultiWorkerMirroredStrategy(\n\
+        \        tf.distribute.experimental.CollectiveCommunication.RING)\n    NUM_WORKERS\
+        \ = strategy.num_replicas_in_sync\n    print('=================\\r\\nWorkers:\
+        \ ' + str(NUM_WORKERS) + '\\r\\n=================\\r\\n')\n    #learn_rate\
+        \ = 0.02 + NUM_WORKERS * 2\n    #learn_rate = 0.5 + NUM_WORKERS * 8\n    #learn_rate\
+        \ = 5 + NUM_WORKERS * 15\n    learn_rate = 0.00001 + NUM_WORKERS * 0.0000016\n\
+        \    #learn_rate = 20 + NUM_WORKERS * 8\n    adam_optim = tf.keras.optimizers.Adam(lr=learn_rate)\n\
+        \    batch_size = 32* NUM_WORKERS\n    model_path='/persist-log/test_model_0523.h5'\n\
+        \    print(model_path)\n    callbacks = [tf.keras.callbacks.ModelCheckpoint(model_path,\
+        \ save_weights_only=True, verbose=1)]\n    #X_train=np.array(X_train)\n  \
+        \  #print(type(X_train))\n    with strategy.scope():\n        Anchor = X_train[:,\
+        \ 0, :].reshape(-1, img_size, img_size, channel)\n        Positive = X_train[:,\
+        \ 1, :].reshape(-1, img_size, img_size, channel)\n        Negative = X_train[:,\
+        \ 2, :].reshape(-1, img_size, img_size, channel)\n        Y_dummy = np.empty(Anchor.shape[0])\n\
+        \        model = training_model((img_size, img_size, channel), FREEZE_LAYERS,\
+        \ facenet_weight_path)\n\n    model.fit(x=[Anchor, Positive, Negative],\n\
+        \        y=Y_dummy,\n        # Anchor_test = X_test[:, 0, :].reshape(-1, img_size,\
+        \ img_size, channel)\n        # Positive_test = X_test[:, 1, :].reshape(-1,\
+        \ img_size, img_size, channel)\n        # Negative_test = X_test[:, 2, :].reshape(-1,\
+        \ img_size, img_size, channel)\n        # Y_dummy = np.empty(Anchor.shape[0])\n\
+        \        # Y_dummy2 = np.empty((Anchor_test.shape[0], 1))\n        # validation_data=([Anchor_test,Positive_test,Negative_test],Y_dummy2),\n\
+        \        # validation_split=0.2,\n        batch_size=batch_size,  # old setting:\
+        \ 32\n        # steps_per_epoch=(X_train.shape[0] // batch_size) + 1,\n  \
+        \      epochs=10,#-------------------------------------------------------epoch\n\
+        \        callbacks=callbacks\n        )  \n\n    train_time_end = time.time()\n\
+        \    train_time = (train_time_end - train_time_start)/60\n    train_time_str2\
+        \ = str(train_time)\n\n    print('execution time = ',train_time_str2)\n  \
+        \  return [train_time_str2]\n\ndef _serialize_str(str_value: str) -> str:\n\
+        \    if not isinstance(str_value, str):\n        raise TypeError('Value \"\
+        {}\" has type \"{}\" instead of str.'.format(str(str_value), str(type(str_value))))\n\
+        \    return str_value\n\nimport argparse\n_parser = argparse.ArgumentParser(prog='Distributed\
+        \ training work2', description='')\n_parser.add_argument(\"--conv-time\",\
+        \ dest=\"conv_time\", type=str, required=True, default=argparse.SUPPRESS)\n\
+        _parser.add_argument(\"----output-paths\", dest=\"_output_paths\", type=str,\
+        \ nargs=1)\n_parsed_args = vars(_parser.parse_args())\n_output_files = _parsed_args.pop(\"\
+        _output_paths\", [])\n\n_outputs = Distributed_training_work2(**_parsed_args)\n\
+        \n_output_serializers = [\n    _serialize_str,\n\n]\n\nimport os\nfor idx,\
+        \ output_file in enumerate(_output_files):\n    try:\n        os.makedirs(os.path.dirname(output_file))\n\
+        \    except OSError:\n        pass\n    with open(output_file, 'w') as f:\n\
+        \        f.write(_output_serializers[idx](_outputs[idx]))\n"
+      image: mike0355/face-recognition-0523:latest
+      ports:
+      - {containerPort: 3001, hostPort: 3001}
+      volumeMounts:
+      - {mountPath: /persist-log, name: face-detect-pvc}
+    inputs:
+      parameters:
+      - {name: convert-to-triplet-conv_time}
+      - {name: face-detect-pvc-name}
+    outputs:
+      parameters:
+      - name: distributed-training-work2-train_time_str2
+        valueFrom: {path: /tmp/outputs/train_time_str2/data}
+      artifacts:
+      - {name: distributed-training-work2-train_time_str2, path: /tmp/outputs/train_time_str2/data}
+    nodeSelector: {disktype: worker-2}
+    metadata:
+      labels: {pod-name: work-1}
+      annotations: {pipelines.kubeflow.org/component_spec: '{"implementation": {"container":
+          {"args": ["--conv-time", {"inputValue": "conv_time"}, "----output-paths",
+          {"outputPath": "train_time_str2"}], "command": ["sh", "-ec", "program_path=$(mktemp)\nprintf
+          \"%s\" \"$0\" > \"$program_path\"\npython3 -u \"$program_path\" \"$@\"\n",
+          "def Distributed_training_work2(conv_time):\n    import numpy as np\n    import
+          sys\n    import time\n    import tensorflow as tf\n    import json\n    import
+          os\n    sys.path.append(\"./\")\n    sys.path.append(\"/persist-log\")\n    sys.path.append(\"/configfile\")\n    from
+          config import img_size, channel, faces_data_dir, FREEZE_LAYERS, classify,
+          facenet_weight_path\n    from inception_resnet_v1 import InceptionResNetV1\n    from
+          itertools import permutations\n    from tqdm import tqdm\n    from tensorflow.keras
+          import backend as K\n    from sklearn.manifold import TSNE\n    #load data
+          from pvc in the container\n    data = np.load(''triplet-data.npz'')\n    X_train,
+          X_test = data[''arr_0''], data[''arr_1'']\n\n    train_time_start = time.time()\n    def
+          training_model(in_shape,freeze_layers,weights_path):\n\n        def create_base_network(in_dims,freeze_layers,weights_path):\n            model
+          = InceptionResNetV1(input_shape=in_dims, weights_path=weights_path)\n            print(''layer
+          length: '', len(model.layers))\n            for layer in model.layers[:freeze_layers]:\n                layer.trainable
+          = False\n            for layer in model.layers[freeze_layers:]:\n                layer.trainable
+          = True\n            return model\n\n        def triplet_loss(y_true,y_pred,alpha=0.4):\n            total_lenght
+          = y_pred.shape.as_list()[-1]\n            anchor = y_pred[:, 0:int(total_lenght
+          * 1 / 3)]\n            positive = y_pred[:, int(total_lenght * 1 / 3):int(total_lenght
+          * 2 / 3)]\n            negative = y_pred[:, int(total_lenght * 2 / 3):int(total_lenght
+          * 3 / 3)]\n            # distance between the anchor and the positive\n            pos_dist
+          = K.sum(K.square(anchor - positive), axis=1)\n            # distance between
+          the anchor and the negative\n            neg_dist = K.sum(K.square(anchor
+          - negative), axis=1)\n            # compute loss\n            basic_loss
+          = pos_dist - neg_dist + alpha\n            loss = K.maximum(basic_loss,
+          0.0)\n            return loss\n        # define triplet input layers\n        anchor_input
+          = tf.keras.layers.Input(in_shape, name=''anchor_input'')\n        positive_input
+          = tf.keras.layers.Input(in_shape, name=''positive_input'')\n        negative_input
+          = tf.keras.layers.Input(in_shape, name=''negative_input'')\n        Shared_DNN
+          = create_base_network(in_shape, freeze_layers, weights_path)\n        #
+          Shared_DNN.summary()\n        # encoded inputs\n        encoded_anchor =
+          Shared_DNN(anchor_input)\n        encoded_positive = Shared_DNN(positive_input)\n        encoded_negative
+          = Shared_DNN(negative_input)\n        # output\n        merged_vector =
+          tf.keras.layers.concatenate([encoded_anchor, encoded_positive, encoded_negative],axis=-1,name=''merged_layer'')\n        model
+          = tf.keras.Model(inputs=[anchor_input, positive_input, negative_input],
+          outputs=merged_vector)\n        model.compile(\n            optimizer=adam_optim,\n            loss=triplet_loss,\n        )\n        return
+          model\n\n    os.environ[''TF_CONFIG''] = json.dumps({''cluster'': {''worker'':
+          [\"pipeline-worker-0:3001\",\"pipeline-worker-1:3001\",\"pipeline-worker-2:3001\"]},''task'':
+          {''type'': ''worker'', ''index'': 1}})\n    #os.environ[''TF_CONFIG''] =
+          json.dumps({''cluster'': {''worker'': [\"pipeline-worker-1:3000\",\"pipeline-worker-2:3000\",\"pipeline-worker-3:3000\"]},''task'':
+          {''type'': ''worker'', ''index'': 1}})\n    #os.environ[''TF_CONFIG''] =
+          json.dumps({''cluster'': {''worker'': [\"pipeline-worker-1:3000\"]},''task'':
+          {''type'': ''worker'', ''index'': 0}})\n\n    strategy = tf.distribute.experimental.MultiWorkerMirroredStrategy(\n        tf.distribute.experimental.CollectiveCommunication.RING)\n    NUM_WORKERS
+          = strategy.num_replicas_in_sync\n    print(''=================\\r\\nWorkers:
+          '' + str(NUM_WORKERS) + ''\\r\\n=================\\r\\n'')\n    #learn_rate
+          = 0.02 + NUM_WORKERS * 2\n    #learn_rate = 0.5 + NUM_WORKERS * 8\n    #learn_rate
+          = 5 + NUM_WORKERS * 15\n    learn_rate = 0.00001 + NUM_WORKERS * 0.0000016\n    #learn_rate
+          = 20 + NUM_WORKERS * 8\n    adam_optim = tf.keras.optimizers.Adam(lr=learn_rate)\n    batch_size
+          = 32* NUM_WORKERS\n    model_path=''/persist-log/test_model_0523.h5''\n    print(model_path)\n    callbacks
+          = [tf.keras.callbacks.ModelCheckpoint(model_path, save_weights_only=True,
+          verbose=1)]\n    #X_train=np.array(X_train)\n    #print(type(X_train))\n    with
+          strategy.scope():\n        Anchor = X_train[:, 0, :].reshape(-1, img_size,
+          img_size, channel)\n        Positive = X_train[:, 1, :].reshape(-1, img_size,
+          img_size, channel)\n        Negative = X_train[:, 2, :].reshape(-1, img_size,
+          img_size, channel)\n        Y_dummy = np.empty(Anchor.shape[0])\n        model
+          = training_model((img_size, img_size, channel), FREEZE_LAYERS, facenet_weight_path)\n\n    model.fit(x=[Anchor,
+          Positive, Negative],\n        y=Y_dummy,\n        # Anchor_test = X_test[:,
+          0, :].reshape(-1, img_size, img_size, channel)\n        # Positive_test
+          = X_test[:, 1, :].reshape(-1, img_size, img_size, channel)\n        # Negative_test
+          = X_test[:, 2, :].reshape(-1, img_size, img_size, channel)\n        # Y_dummy
+          = np.empty(Anchor.shape[0])\n        # Y_dummy2 = np.empty((Anchor_test.shape[0],
+          1))\n        # validation_data=([Anchor_test,Positive_test,Negative_test],Y_dummy2),\n        #
+          validation_split=0.2,\n        batch_size=batch_size,  # old setting: 32\n        #
+          steps_per_epoch=(X_train.shape[0] // batch_size) + 1,\n        epochs=10,#-------------------------------------------------------epoch\n        callbacks=callbacks\n        )  \n\n    train_time_end
+          = time.time()\n    train_time = (train_time_end - train_time_start)/60\n    train_time_str2
+          = str(train_time)\n\n    print(''execution time = '',train_time_str2)\n    return
+          [train_time_str2]\n\ndef _serialize_str(str_value: str) -> str:\n    if
+          not isinstance(str_value, str):\n        raise TypeError(''Value \"{}\"
+          has type \"{}\" instead of str.''.format(str(str_value), str(type(str_value))))\n    return
+          str_value\n\nimport argparse\n_parser = argparse.ArgumentParser(prog=''Distributed
+          training work2'', description='''')\n_parser.add_argument(\"--conv-time\",
+          dest=\"conv_time\", type=str, required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"----output-paths\",
+          dest=\"_output_paths\", type=str, nargs=1)\n_parsed_args = vars(_parser.parse_args())\n_output_files
+          = _parsed_args.pop(\"_output_paths\", [])\n\n_outputs = Distributed_training_work2(**_parsed_args)\n\n_output_serializers
+          = [\n    _serialize_str,\n\n]\n\nimport os\nfor idx, output_file in enumerate(_output_files):\n    try:\n        os.makedirs(os.path.dirname(output_file))\n    except
+          OSError:\n        pass\n    with open(output_file, ''w'') as f:\n        f.write(_output_serializers[idx](_outputs[idx]))\n"],
+          "image": "mike0355/face-recognition-0523:latest"}}, "inputs": [{"name":
+          "conv_time", "type": "String"}], "name": "Distributed training work2", "outputs":
+          [{"name": "train_time_str2", "type": "String"}]}', pipelines.kubeflow.org/component_ref: '{}',
+        pipelines.kubeflow.org/arguments.parameters: '{"conv_time": "{{inputs.parameters.convert-to-triplet-conv_time}}"}'}
+    volumes:
+    - name: face-detect-pvc
+      persistentVolumeClaim: {claimName: '{{inputs.parameters.face-detect-pvc-name}}'}
+  - name: distributed-training-work3
+    container:
+      args: [--conv-time, '{{inputs.parameters.convert-to-triplet-conv_time}}', '----output-paths',
+        /tmp/outputs/train_time_str3/data]
+      command:
+      - sh
+      - -ec
+      - |
+        program_path=$(mktemp)
+        printf "%s" "$0" > "$program_path"
+        python3 -u "$program_path" "$@"
+      - "def Distributed_training_work3(conv_time):\n    import numpy as np\n    import\
+        \ sys\n    import time\n    import tensorflow as tf\n    import json\n   \
+        \ import os\n    sys.path.append(\"./\")\n    sys.path.append(\"/persist-log\"\
+        )\n    sys.path.append(\"/configfile\")\n    from config import img_size,\
+        \ channel, faces_data_dir, FREEZE_LAYERS, classify, facenet_weight_path\n\
+        \    from inception_resnet_v1 import InceptionResNetV1\n    from itertools\
+        \ import permutations\n    from tqdm import tqdm\n    from tensorflow.keras\
+        \ import backend as K\n    from sklearn.manifold import TSNE\n    #load data\
+        \ from pvc in the container\n    data = np.load('triplet-data.npz')\n    X_train,\
+        \ X_test = data['arr_0'], data['arr_1']\n\n    train_time_start = time.time()\n\
+        \    def training_model(in_shape,freeze_layers,weights_path):\n\n        def\
+        \ create_base_network(in_dims,freeze_layers,weights_path):\n            model\
+        \ = InceptionResNetV1(input_shape=in_dims, weights_path=weights_path)\n  \
+        \          print('layer length: ', len(model.layers))\n            for layer\
+        \ in model.layers[:freeze_layers]:\n                layer.trainable = False\n\
+        \            for layer in model.layers[freeze_layers:]:\n                layer.trainable\
+        \ = True\n            return model\n\n        def triplet_loss(y_true,y_pred,alpha=0.4):\n\
+        \            total_lenght = y_pred.shape.as_list()[-1]\n            anchor\
+        \ = y_pred[:, 0:int(total_lenght * 1 / 3)]\n            positive = y_pred[:,\
+        \ int(total_lenght * 1 / 3):int(total_lenght * 2 / 3)]\n            negative\
+        \ = y_pred[:, int(total_lenght * 2 / 3):int(total_lenght * 3 / 3)]\n     \
+        \       # distance between the anchor and the positive\n            pos_dist\
+        \ = K.sum(K.square(anchor - positive), axis=1)\n            # distance between\
+        \ the anchor and the negative\n            neg_dist = K.sum(K.square(anchor\
+        \ - negative), axis=1)\n            # compute loss\n            basic_loss\
+        \ = pos_dist - neg_dist + alpha\n            loss = K.maximum(basic_loss,\
+        \ 0.0)\n            return loss\n        # define triplet input layers\n \
+        \       anchor_input = tf.keras.layers.Input(in_shape, name='anchor_input')\n\
+        \        positive_input = tf.keras.layers.Input(in_shape, name='positive_input')\n\
+        \        negative_input = tf.keras.layers.Input(in_shape, name='negative_input')\n\
+        \        Shared_DNN = create_base_network(in_shape, freeze_layers, weights_path)\n\
+        \        # Shared_DNN.summary()\n        # encoded inputs\n        encoded_anchor\
+        \ = Shared_DNN(anchor_input)\n        encoded_positive = Shared_DNN(positive_input)\n\
+        \        encoded_negative = Shared_DNN(negative_input)\n        # output\n\
+        \        merged_vector = tf.keras.layers.concatenate([encoded_anchor, encoded_positive,\
+        \ encoded_negative],axis=-1,name='merged_layer')\n        model = tf.keras.Model(inputs=[anchor_input,\
+        \ positive_input, negative_input], outputs=merged_vector)\n        model.compile(\n\
+        \            optimizer=adam_optim,\n            loss=triplet_loss,\n     \
+        \   )\n        return model\n\n    os.environ['TF_CONFIG'] = json.dumps({'cluster':\
+        \ {'worker': [\"pipeline-worker-0:3001\",\"pipeline-worker-1:3001\",\"pipeline-worker-2:3001\"\
+        ]},'task': {'type': 'worker', 'index': 2}})\n    #os.environ['TF_CONFIG']\
+        \ = json.dumps({'cluster': {'worker': [\"pipeline-worker-1:3000\"]},'task':\
+        \ {'type': 'worker', 'index': 0}})\n\n    strategy = tf.distribute.experimental.MultiWorkerMirroredStrategy(\n\
+        \        tf.distribute.experimental.CollectiveCommunication.RING)\n    NUM_WORKERS\
+        \ = strategy.num_replicas_in_sync\n    print('=================\\r\\nWorkers:\
+        \ ' + str(NUM_WORKERS) + '\\r\\n=================\\r\\n')\n    #learn_rate\
+        \ = 0.02 + NUM_WORKERS *2\n    #learn_rate = 0.5 + NUM_WORKERS * 8\n    #learn_rate\
+        \ = 5 + NUM_WORKERS * 15\n    learn_rate = 0.00001 + NUM_WORKERS * 0.0000016\n\
+        \    #learn_rate = 20 + NUM_WORKERS * 8\n    adam_optim = tf.keras.optimizers.Adam(lr=learn_rate)\n\
+        \    batch_size = 32* NUM_WORKERS\n    model_path='/persist-log/test_model_0523.h5'\n\
+        \    print(model_path)\n    callbacks = [tf.keras.callbacks.ModelCheckpoint(model_path,\
+        \ save_weights_only=True, verbose=1)]\n    #X_train=np.array(X_train)\n  \
+        \  #print(type(X_train))\n    with strategy.scope():\n        Anchor = X_train[:,\
+        \ 0, :].reshape(-1, img_size, img_size, channel)\n        Positive = X_train[:,\
+        \ 1, :].reshape(-1, img_size, img_size, channel)\n        Negative = X_train[:,\
+        \ 2, :].reshape(-1, img_size, img_size, channel)\n        Y_dummy = np.empty(Anchor.shape[0])\n\
+        \        model = training_model((img_size, img_size, channel), FREEZE_LAYERS,\
+        \ facenet_weight_path)\n\n    model.fit(x=[Anchor, Positive, Negative],\n\
+        \        y=Y_dummy,\n        # Anchor_test = X_test[:, 0, :].reshape(-1, img_size,\
+        \ img_size, channel)\n        # Positive_test = X_test[:, 1, :].reshape(-1,\
+        \ img_size, img_size, channel)\n        # Negative_test = X_test[:, 2, :].reshape(-1,\
+        \ img_size, img_size, channel)\n        # Y_dummy = np.empty(Anchor.shape[0])\n\
+        \        # Y_dummy2 = np.empty((Anchor_test.shape[0], 1))\n        # validation_data=([Anchor_test,Positive_test,Negative_test],Y_dummy2),\n\
+        \        # validation_split=0.2,\n        batch_size=batch_size,  # old setting:\
+        \ 32\n        # steps_per_epoch=(X_train.shape[0] // batch_size) + 1,\n  \
+        \      epochs=10, #-------------------------------------------------------epoch\n\
+        \        callbacks=callbacks\n        )  \n\n    train_time_end = time.time()\n\
+        \    train_time = (train_time_end - train_time_start)/60\n    train_time_str3\
+        \ = str(train_time)\n\n    print('execution time = ',train_time_str3)\n  \
+        \  return [train_time_str3]\n\ndef _serialize_str(str_value: str) -> str:\n\
+        \    if not isinstance(str_value, str):\n        raise TypeError('Value \"\
+        {}\" has type \"{}\" instead of str.'.format(str(str_value), str(type(str_value))))\n\
+        \    return str_value\n\nimport argparse\n_parser = argparse.ArgumentParser(prog='Distributed\
+        \ training work3', description='')\n_parser.add_argument(\"--conv-time\",\
+        \ dest=\"conv_time\", type=str, required=True, default=argparse.SUPPRESS)\n\
+        _parser.add_argument(\"----output-paths\", dest=\"_output_paths\", type=str,\
+        \ nargs=1)\n_parsed_args = vars(_parser.parse_args())\n_output_files = _parsed_args.pop(\"\
+        _output_paths\", [])\n\n_outputs = Distributed_training_work3(**_parsed_args)\n\
+        \n_output_serializers = [\n    _serialize_str,\n\n]\n\nimport os\nfor idx,\
+        \ output_file in enumerate(_output_files):\n    try:\n        os.makedirs(os.path.dirname(output_file))\n\
+        \    except OSError:\n        pass\n    with open(output_file, 'w') as f:\n\
+        \        f.write(_output_serializers[idx](_outputs[idx]))\n"
+      image: mike0355/face-recognition-0523:latest
+      ports:
+      - {containerPort: 3001, hostPort: 3001}
+      volumeMounts:
+      - {mountPath: /persist-log, name: face-detect-pvc}
+    inputs:
+      parameters:
+      - {name: convert-to-triplet-conv_time}
+      - {name: face-detect-pvc-name}
+    outputs:
+      parameters:
+      - name: distributed-training-work3-train_time_str3
+        valueFrom: {path: /tmp/outputs/train_time_str3/data}
+      artifacts:
+      - {name: distributed-training-work3-train_time_str3, path: /tmp/outputs/train_time_str3/data}
+    nodeSelector: {disktype: worker-3}
+    metadata:
+      labels: {pod-name: work-2}
+      annotations: {pipelines.kubeflow.org/component_spec: '{"implementation": {"container":
+          {"args": ["--conv-time", {"inputValue": "conv_time"}, "----output-paths",
+          {"outputPath": "train_time_str3"}], "command": ["sh", "-ec", "program_path=$(mktemp)\nprintf
+          \"%s\" \"$0\" > \"$program_path\"\npython3 -u \"$program_path\" \"$@\"\n",
+          "def Distributed_training_work3(conv_time):\n    import numpy as np\n    import
+          sys\n    import time\n    import tensorflow as tf\n    import json\n    import
+          os\n    sys.path.append(\"./\")\n    sys.path.append(\"/persist-log\")\n    sys.path.append(\"/configfile\")\n    from
+          config import img_size, channel, faces_data_dir, FREEZE_LAYERS, classify,
+          facenet_weight_path\n    from inception_resnet_v1 import InceptionResNetV1\n    from
+          itertools import permutations\n    from tqdm import tqdm\n    from tensorflow.keras
+          import backend as K\n    from sklearn.manifold import TSNE\n    #load data
+          from pvc in the container\n    data = np.load(''triplet-data.npz'')\n    X_train,
+          X_test = data[''arr_0''], data[''arr_1'']\n\n    train_time_start = time.time()\n    def
+          training_model(in_shape,freeze_layers,weights_path):\n\n        def create_base_network(in_dims,freeze_layers,weights_path):\n            model
+          = InceptionResNetV1(input_shape=in_dims, weights_path=weights_path)\n            print(''layer
+          length: '', len(model.layers))\n            for layer in model.layers[:freeze_layers]:\n                layer.trainable
+          = False\n            for layer in model.layers[freeze_layers:]:\n                layer.trainable
+          = True\n            return model\n\n        def triplet_loss(y_true,y_pred,alpha=0.4):\n            total_lenght
+          = y_pred.shape.as_list()[-1]\n            anchor = y_pred[:, 0:int(total_lenght
+          * 1 / 3)]\n            positive = y_pred[:, int(total_lenght * 1 / 3):int(total_lenght
+          * 2 / 3)]\n            negative = y_pred[:, int(total_lenght * 2 / 3):int(total_lenght
+          * 3 / 3)]\n            # distance between the anchor and the positive\n            pos_dist
+          = K.sum(K.square(anchor - positive), axis=1)\n            # distance between
+          the anchor and the negative\n            neg_dist = K.sum(K.square(anchor
+          - negative), axis=1)\n            # compute loss\n            basic_loss
+          = pos_dist - neg_dist + alpha\n            loss = K.maximum(basic_loss,
+          0.0)\n            return loss\n        # define triplet input layers\n        anchor_input
+          = tf.keras.layers.Input(in_shape, name=''anchor_input'')\n        positive_input
+          = tf.keras.layers.Input(in_shape, name=''positive_input'')\n        negative_input
+          = tf.keras.layers.Input(in_shape, name=''negative_input'')\n        Shared_DNN
+          = create_base_network(in_shape, freeze_layers, weights_path)\n        #
+          Shared_DNN.summary()\n        # encoded inputs\n        encoded_anchor =
+          Shared_DNN(anchor_input)\n        encoded_positive = Shared_DNN(positive_input)\n        encoded_negative
+          = Shared_DNN(negative_input)\n        # output\n        merged_vector =
+          tf.keras.layers.concatenate([encoded_anchor, encoded_positive, encoded_negative],axis=-1,name=''merged_layer'')\n        model
+          = tf.keras.Model(inputs=[anchor_input, positive_input, negative_input],
+          outputs=merged_vector)\n        model.compile(\n            optimizer=adam_optim,\n            loss=triplet_loss,\n        )\n        return
+          model\n\n    os.environ[''TF_CONFIG''] = json.dumps({''cluster'': {''worker'':
+          [\"pipeline-worker-0:3001\",\"pipeline-worker-1:3001\",\"pipeline-worker-2:3001\"]},''task'':
+          {''type'': ''worker'', ''index'': 2}})\n    #os.environ[''TF_CONFIG''] =
+          json.dumps({''cluster'': {''worker'': [\"pipeline-worker-1:3000\"]},''task'':
+          {''type'': ''worker'', ''index'': 0}})\n\n    strategy = tf.distribute.experimental.MultiWorkerMirroredStrategy(\n        tf.distribute.experimental.CollectiveCommunication.RING)\n    NUM_WORKERS
+          = strategy.num_replicas_in_sync\n    print(''=================\\r\\nWorkers:
+          '' + str(NUM_WORKERS) + ''\\r\\n=================\\r\\n'')\n    #learn_rate
+          = 0.02 + NUM_WORKERS *2\n    #learn_rate = 0.5 + NUM_WORKERS * 8\n    #learn_rate
+          = 5 + NUM_WORKERS * 15\n    learn_rate = 0.00001 + NUM_WORKERS * 0.0000016\n    #learn_rate
+          = 20 + NUM_WORKERS * 8\n    adam_optim = tf.keras.optimizers.Adam(lr=learn_rate)\n    batch_size
+          = 32* NUM_WORKERS\n    model_path=''/persist-log/test_model_0523.h5''\n    print(model_path)\n    callbacks
+          = [tf.keras.callbacks.ModelCheckpoint(model_path, save_weights_only=True,
+          verbose=1)]\n    #X_train=np.array(X_train)\n    #print(type(X_train))\n    with
+          strategy.scope():\n        Anchor = X_train[:, 0, :].reshape(-1, img_size,
+          img_size, channel)\n        Positive = X_train[:, 1, :].reshape(-1, img_size,
+          img_size, channel)\n        Negative = X_train[:, 2, :].reshape(-1, img_size,
+          img_size, channel)\n        Y_dummy = np.empty(Anchor.shape[0])\n        model
+          = training_model((img_size, img_size, channel), FREEZE_LAYERS, facenet_weight_path)\n\n    model.fit(x=[Anchor,
+          Positive, Negative],\n        y=Y_dummy,\n        # Anchor_test = X_test[:,
+          0, :].reshape(-1, img_size, img_size, channel)\n        # Positive_test
+          = X_test[:, 1, :].reshape(-1, img_size, img_size, channel)\n        # Negative_test
+          = X_test[:, 2, :].reshape(-1, img_size, img_size, channel)\n        # Y_dummy
+          = np.empty(Anchor.shape[0])\n        # Y_dummy2 = np.empty((Anchor_test.shape[0],
+          1))\n        # validation_data=([Anchor_test,Positive_test,Negative_test],Y_dummy2),\n        #
+          validation_split=0.2,\n        batch_size=batch_size,  # old setting: 32\n        #
+          steps_per_epoch=(X_train.shape[0] // batch_size) + 1,\n        epochs=10,
+          #-------------------------------------------------------epoch\n        callbacks=callbacks\n        )  \n\n    train_time_end
+          = time.time()\n    train_time = (train_time_end - train_time_start)/60\n    train_time_str3
+          = str(train_time)\n\n    print(''execution time = '',train_time_str3)\n    return
+          [train_time_str3]\n\ndef _serialize_str(str_value: str) -> str:\n    if
+          not isinstance(str_value, str):\n        raise TypeError(''Value \"{}\"
+          has type \"{}\" instead of str.''.format(str(str_value), str(type(str_value))))\n    return
+          str_value\n\nimport argparse\n_parser = argparse.ArgumentParser(prog=''Distributed
+          training work3'', description='''')\n_parser.add_argument(\"--conv-time\",
+          dest=\"conv_time\", type=str, required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"----output-paths\",
+          dest=\"_output_paths\", type=str, nargs=1)\n_parsed_args = vars(_parser.parse_args())\n_output_files
+          = _parsed_args.pop(\"_output_paths\", [])\n\n_outputs = Distributed_training_work3(**_parsed_args)\n\n_output_serializers
+          = [\n    _serialize_str,\n\n]\n\nimport os\nfor idx, output_file in enumerate(_output_files):\n    try:\n        os.makedirs(os.path.dirname(output_file))\n    except
+          OSError:\n        pass\n    with open(output_file, ''w'') as f:\n        f.write(_output_serializers[idx](_outputs[idx]))\n"],
+          "image": "mike0355/face-recognition-0523:latest"}}, "inputs": [{"name":
+          "conv_time", "type": "String"}], "name": "Distributed training work3", "outputs":
+          [{"name": "train_time_str3", "type": "String"}]}', pipelines.kubeflow.org/component_ref: '{}',
+        pipelines.kubeflow.org/arguments.parameters: '{"conv_time": "{{inputs.parameters.convert-to-triplet-conv_time}}"}'}
+    volumes:
+    - name: face-detect-pvc
+      persistentVolumeClaim: {claimName: '{{inputs.parameters.face-detect-pvc-name}}'}
+  - name: face-detect-pvc
+    resource:
+      action: create
+      manifest: |
+        apiVersion: v1
+        kind: PersistentVolumeClaim
+        metadata:
+          name: '{{workflow.name}}-newpvc'
+        spec:
+          accessModes:
+          - ReadWriteMany
+          resources:
+            requests:
+              storage: 20Gi
+          storageClassName: managed-nfs-storage
+    outputs:
+      parameters:
+      - name: face-detect-pvc-manifest
+        valueFrom: {jsonPath: '{}'}
+      - name: face-detect-pvc-name
+        valueFrom: {jsonPath: '{.metadata.name}'}
+      - name: face-detect-pvc-size
+        valueFrom: {jsonPath: '{.status.capacity.storage}'}
+  - name: facial-recognition
+    container:
+      args: [--block3-time-str, '{{inputs.parameters.svm-training-block3_time_str}}']
+      command:
+      - sh
+      - -ec
+      - |
+        program_path=$(mktemp)
+        printf "%s" "$0" > "$program_path"
+        python3 -u "$program_path" "$@"
+      - "def facial_recognition(block3_time_str):\n    #---------------------------------------------import\
+        \ facenet-model-weight-pack.\n    import sys\n    import os\n    sys.path.append(\"\
+        ./\")\n    sys.path.append(\"/persist-log\")\n    sys.path.append(\"/configfile\"\
+        )\n    sys.path.append(\"/templates\")\n\n    from inception_resnet_v1 import\
+        \ InceptionResNetV1\n    from triplet_training import create_base_network\n\
+        \    from config import img_size, channel, faces_data_dir, FREEZE_LAYERS,\
+        \ classify, facenet_weight_path\n    #----------------------------------------------\
+        \ import main package\n    import pymongo\n    import time\n    import warnings\n\
+        \    from PIL import Image\n    import numpy as np\n    from mtcnn_cv2 import\
+        \ MTCNN\n    #from keras.models import load_model\n    from sklearn.preprocessing\
+        \ import Normalizer, LabelEncoder\n    import pickle\n    from flask import\
+        \ Flask, render_template, Response, request, url_for, redirect\n    import\
+        \ cv2\n    import keras.backend.tensorflow_backend as tb\n    import tensorflow\
+        \ as tf\n    warnings.filterwarnings(\"ignore\")\n    from threading import\
+        \ Thread, Lock\n    print(\"import susscess....\")\n    #---------------------------------------------class\
+        \ definition\n    block4_start = time.time()\n\n    class CameraStream(object):\n\
+        \        def __init__(self, src=0):\n            self.stream = cv2.VideoCapture(src)\n\
+        \            (self.grabbed, self.frame) = self.stream.read()\n           \
+        \ self.started = False\n            self.read_lock = Lock()\n\n        def\
+        \ start(self):\n            if self.started:\n                print(\"already\
+        \ started!!\")\n                return None\n            self.started = True\n\
+        \            self.thread = Thread(target=self.update, args=())\n         \
+        \   self.thread.start()\n            return self\n\n        def update(self):\n\
+        \            while self.started:\n                (grabbed, frame) = self.stream.read()\n\
+        \                self.read_lock.acquire()\n                self.grabbed, self.frame\
+        \ = grabbed, frame\n                self.read_lock.release()\n\n        def\
+        \ read(self):\n            self.read_lock.acquire()\n            frame = self.frame.copy()\n\
+        \            self.read_lock.release()\n            return frame\n\n      \
+        \  def stop(self):\n            self.started = False\n            self.thread.join()\n\
+        \n        def __exit__(self, exc_type, exc_value, traceback):\n          \
+        \  self.stream.release()\n\n    # ----------------------------------------------------mongodb\
+        \ conn.\n\n    # -----------------------------------------------------   \
+        \     \n\n    cap = CameraStream().start()  \n    def getDateTime():\n   \
+        \     return time.strftime(\"%Y-%m-%d %H:%M:%S\", time.localtime())\n    #\
+        \ -----------------------------------------------------import model and classfier\
+        \        \n    svm_model = pickle.load(open(\"SVM_classifier.pkl\", \"rb\"\
+        ))       \n    data = np.load('faces_embeddings.npz')\n    detector = MTCNN()\n\
+        \    no_results = \"unknown\"\n\n    # ------------------------------------------------------use\
+        \ weight to create model \n    model_path = '/persist-log/test_model_0523.h5'\n\
+        \    anchor_input = tf.keras.Input((img_size, img_size, channel,), name='anchor_input')\n\
+        \n    Shared_DNN = create_base_network((img_size, img_size, channel), FREEZE_LAYERS,\
+        \ facenet_weight_path)\n    encoded_anchor = Shared_DNN(anchor_input)\n\n\
+        \    model = tf.keras.Model(inputs=anchor_input, outputs=encoded_anchor)\n\
+        \n    model.load_weights(model_path)\n\n    model.summary()\n    #----------------------------------------------------------\
+        \ main definition\n    def face_mtcnn_extractor(frame):\n        result =\
+        \ detector.detect_faces(frame)\n        return result\n\n    def face_localizer(person):\n\
+        \        bounding_box = person['box']\n        x1, y1 = abs(bounding_box[0]),\
+        \ abs(bounding_box[1])\n        width, height = bounding_box[2], bounding_box[3]\n\
+        \        x2, y2 = x1 + width, y1 + height\n        return x1, y1, x2, y2,\
+        \ width, height   \n\n    def face_preprocessor(frame, x1, y1, x2, y2, required_size=(160,\
+        \ 160)):\n        face = frame[y1:y2, x1:x2]\n        image = Image.fromarray(face)\n\
+        \        image = image.resize(required_size)\n        face_array = np.asarray(image)\n\
+        \        face_pixels = face_array.astype('float32')\n        mean, std = face_pixels.mean(),\
+        \ face_pixels.std()\n        face_pixels = (face_pixels - mean) / std\n  \
+        \      samples = np.expand_dims(face_pixels, axis=0)\n        yhat = model.predict(samples)\
+        \    # facenet-model\n        face_embedded = yhat[0]\n        in_encoder\
+        \ = Normalizer(norm='l2')\n        X = in_encoder.transform(face_embedded.reshape(1,\
+        \ -1))\n        return X\n\n    def face_svm_classifier(X):\n        yhat\
+        \ = svm_model.predict(X)\n        label = yhat[0]\n        yhat_prob = svm_model.predict_proba(X)\n\
+        \        probability = round(yhat_prob[0][label], 2)\n        trainy = data['arr_1']\n\
+        \        out_encoder = LabelEncoder()\n        out_encoder.fit(trainy)\n \
+        \       predicted_class_label = out_encoder.inverse_transform(yhat)\n    \
+        \    label = predicted_class_label[0]\n        return label, str(probability)\
+        \ \n    #----------------------------------------------------main code   \
+        \   \n\n    app = Flask(__name__,template_folder=\"/templates\")\n\n    @app.route('/',\
+        \ methods=['GET', 'POST'])\n    def index():\n        \"\"\"Video streaming\
+        \ home page.\"\"\"\n        if request.method == 'POST':\n            tb._SYMBOLIC_SCOPE.value\
+        \ = True\n            print(\"redirect\")\n            return redirect('att_list')\n\
+        \        return render_template('index.html')      \n\n    def gen_frame():\n\
+        \        \"\"\"Video streaming generator function.\"\"\"\n        tb._SYMBOLIC_SCOPE.value\
+        \ = True\n\n        mongo_host = \"mongodb://testUser:passwd@10.244.1.102:27017\"\
+        \  # uri\n        dbName = \"db1\"\n        collectionName = \"Attendence\"\
+        \n\n        myclient = pymongo.MongoClient(mongo_host)  # conn\n        database\
+        \ = myclient[dbName]\n        collection = database[collectionName]\n    \
+        \    dblist = myclient.list_database_names()\n        print(\"Connection finished....\"\
+        )\n\n        while cap:\n            frame = cap.read()        \n\n      \
+        \      result = face_mtcnn_extractor(frame)\n\n            if result:\n\n\
+        \                for person in result:\n\n                    x1, y1, x2,\
+        \ y2, width, height = face_localizer(person)\n\n                    X = face_preprocessor(frame,\
+        \ x1, y1, x2, y2, required_size=(160, 160))\n\n                    label,\
+        \ probability = face_svm_classifier(X)\n\n                    if float(probability)\
+        \ >= 0.8:\n                        print(\" Person : {} , Probability : {}\"\
+        .format(label, probability))\n                        cv2.rectangle(frame,\
+        \ (x1, y1), (x2, y2),(0, 255, 0), 2, cv2.FILLED)\n                       \
+        \ # 6. Add the detected class label to the frame\n                       \
+        \ cv2.putText(frame, label+probability, (x1, y1-20),cv2.FONT_HERSHEY_SIMPLEX,\
+        \ 0.8, (0, 255, 0), 1)\n\n                        if float(probability) >\
+        \ 0.9:\n                            label = str(label)\n                 \
+        \           # ------------------['name ', 'number']\n                    \
+        \        label = label.split('-')  # --------------------- split\n\n     \
+        \                       # -------------------string >>> list\n           \
+        \                 label = list(label)\n\n                            label_name\
+        \ = label[0]  # -------------------['name']\n\n                          \
+        \  label_num = label[1]  # -------------------['number'].\n\n            \
+        \                Name = str(label_name)\n\n                            Number\
+        \ = str(label_num)\n\n                            Acc = float(probability)\n\
+        \n                            if dbName in dblist:\n\n                   \
+        \             mDictionary = {\"Name\": Name,\n                           \
+        \                    \"date\": getDateTime(), \"number\": Number, \"acc\"\
+        : Acc}\n\n                                collection.insert_one(mDictionary)\n\
+        \n                                cursor = collection.distinct(\"Name\")\n\
+        \n                                for item in cursor:\n\n                \
+        \                    repeating = collection.find_one({\"Name\": Name})\n \
+        \                                   result = collection.delete_many({\"Name\"\
+        : Name})\n                                    collection.insert_one(repeating)\n\
+        \n                            else:\n                                print(\"\
+        The database does not exist.\")\n                    else:\n             \
+        \           cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 2)\n\n \
+        \                       cv2.putText(frame, no_results, (x1, y1-20),cv2.FONT_HERSHEY_SIMPLEX,\
+        \ 0.8, (0, 0, 255), 1)\n    # ----------------------------------------------------\n\
+        \            convert = cv2.imencode('.jpg', frame)[1].tobytes()\n        \
+        \    yield (b'--frame\\r\\n'\n                   b'Content-Type: image/jpeg\\\
+        r\\n\\r\\n' + convert + b'\\r\\n')  # concate frame one by one and show result\
+        \        \n\n    @app.route('/video_feed')\n    def video_feed():\n      \
+        \  return Response(gen_frame(),mimetype='multipart/x-mixed-replace; boundary=frame')\
+        \        \n\n    @app.route('/att_list')\n    def list_attendence():\n\n \
+        \       mongo_host = \"mongodb://testUser:passwd@10.244.1.102:27017\"  # uri\n\
+        \        dbName = \"db1\"\n        collectionName = \"Attendence\"\n\n   \
+        \     myclient = pymongo.MongoClient(mongo_host)  # conn\n        database\
+        \ = myclient[dbName]\n        collection = database[collectionName]\n    \
+        \    dblist = myclient.list_database_names()\n        print(\"Connection finished....\"\
+        )\n\n        users = collection.find()\n        print(users)\n\n        return\
+        \ render_template(\"att_list.html\", users=users)        \n\n    if __name__\
+        \ == '__main__':\n        app.run(host='0.0.0.0', threaded=True)        \n\
+        \n    print(\"Suscess.....\")        \n    block4_end = time.time()  \n  \
+        \  block4_diff = (block4_end-block4_start)/60\n    block4_time_str = str(block4_diff)\n\
+        \n    return[block4_time_str]\n\nimport argparse\n_parser = argparse.ArgumentParser(prog='Facial\
+        \ recognition', description='')\n_parser.add_argument(\"--block3-time-str\"\
+        , dest=\"block3_time_str\", type=str, required=True, default=argparse.SUPPRESS)\n\
+        _parsed_args = vars(_parser.parse_args())\n\n_outputs = facial_recognition(**_parsed_args)\n"
+      image: mike0355/face-recognition-0523:latest
+      securityContext: {privileged: true}
+      volumeMounts:
+      - {mountPath: /persist-log, name: face-detect-pvc}
+    inputs:
+      parameters:
+      - {name: face-detect-pvc-name}
+      - {name: svm-training-block3_time_str}
+    nodeSelector: {disktype: worker-0}
+    volumes:
+    - name: face-detect-pvc
+      persistentVolumeClaim: {claimName: '{{inputs.parameters.face-detect-pvc-name}}'}
+    metadata:
+      annotations: {pipelines.kubeflow.org/component_spec: '{"implementation": {"container":
+          {"args": ["--block3-time-str", {"inputValue": "block3_time_str"}], "command":
+          ["sh", "-ec", "program_path=$(mktemp)\nprintf \"%s\" \"$0\" > \"$program_path\"\npython3
+          -u \"$program_path\" \"$@\"\n", "def facial_recognition(block3_time_str):\n    #---------------------------------------------import
+          facenet-model-weight-pack.\n    import sys\n    import os\n    sys.path.append(\"./\")\n    sys.path.append(\"/persist-log\")\n    sys.path.append(\"/configfile\")\n    sys.path.append(\"/templates\")\n\n    from
+          inception_resnet_v1 import InceptionResNetV1\n    from triplet_training
+          import create_base_network\n    from config import img_size, channel, faces_data_dir,
+          FREEZE_LAYERS, classify, facenet_weight_path\n    #----------------------------------------------
+          import main package\n    import pymongo\n    import time\n    import warnings\n    from
+          PIL import Image\n    import numpy as np\n    from mtcnn_cv2 import MTCNN\n    #from
+          keras.models import load_model\n    from sklearn.preprocessing import Normalizer,
+          LabelEncoder\n    import pickle\n    from flask import Flask, render_template,
+          Response, request, url_for, redirect\n    import cv2\n    import keras.backend.tensorflow_backend
+          as tb\n    import tensorflow as tf\n    warnings.filterwarnings(\"ignore\")\n    from
+          threading import Thread, Lock\n    print(\"import susscess....\")\n    #---------------------------------------------class
+          definition\n    block4_start = time.time()\n\n    class CameraStream(object):\n        def
+          __init__(self, src=0):\n            self.stream = cv2.VideoCapture(src)\n            (self.grabbed,
+          self.frame) = self.stream.read()\n            self.started = False\n            self.read_lock
+          = Lock()\n\n        def start(self):\n            if self.started:\n                print(\"already
+          started!!\")\n                return None\n            self.started = True\n            self.thread
+          = Thread(target=self.update, args=())\n            self.thread.start()\n            return
+          self\n\n        def update(self):\n            while self.started:\n                (grabbed,
+          frame) = self.stream.read()\n                self.read_lock.acquire()\n                self.grabbed,
+          self.frame = grabbed, frame\n                self.read_lock.release()\n\n        def
+          read(self):\n            self.read_lock.acquire()\n            frame = self.frame.copy()\n            self.read_lock.release()\n            return
+          frame\n\n        def stop(self):\n            self.started = False\n            self.thread.join()\n\n        def
+          __exit__(self, exc_type, exc_value, traceback):\n            self.stream.release()\n\n    #
+          ----------------------------------------------------mongodb conn.\n\n    #
+          -----------------------------------------------------        \n\n    cap
+          = CameraStream().start()  \n    def getDateTime():\n        return time.strftime(\"%Y-%m-%d
+          %H:%M:%S\", time.localtime())\n    # -----------------------------------------------------import
+          model and classfier        \n    svm_model = pickle.load(open(\"SVM_classifier.pkl\",
+          \"rb\"))       \n    data = np.load(''faces_embeddings.npz'')\n    detector
+          = MTCNN()\n    no_results = \"unknown\"\n\n    # ------------------------------------------------------use
+          weight to create model \n    model_path = ''/persist-log/test_model_0523.h5''\n    anchor_input
+          = tf.keras.Input((img_size, img_size, channel,), name=''anchor_input'')\n\n    Shared_DNN
+          = create_base_network((img_size, img_size, channel), FREEZE_LAYERS, facenet_weight_path)\n    encoded_anchor
+          = Shared_DNN(anchor_input)\n\n    model = tf.keras.Model(inputs=anchor_input,
+          outputs=encoded_anchor)\n\n    model.load_weights(model_path)\n\n    model.summary()\n    #----------------------------------------------------------
+          main definition\n    def face_mtcnn_extractor(frame):\n        result =
+          detector.detect_faces(frame)\n        return result\n\n    def face_localizer(person):\n        bounding_box
+          = person[''box'']\n        x1, y1 = abs(bounding_box[0]), abs(bounding_box[1])\n        width,
+          height = bounding_box[2], bounding_box[3]\n        x2, y2 = x1 + width,
+          y1 + height\n        return x1, y1, x2, y2, width, height   \n\n    def
+          face_preprocessor(frame, x1, y1, x2, y2, required_size=(160, 160)):\n        face
+          = frame[y1:y2, x1:x2]\n        image = Image.fromarray(face)\n        image
+          = image.resize(required_size)\n        face_array = np.asarray(image)\n        face_pixels
+          = face_array.astype(''float32'')\n        mean, std = face_pixels.mean(),
+          face_pixels.std()\n        face_pixels = (face_pixels - mean) / std\n        samples
+          = np.expand_dims(face_pixels, axis=0)\n        yhat = model.predict(samples)    #
+          facenet-model\n        face_embedded = yhat[0]\n        in_encoder = Normalizer(norm=''l2'')\n        X
+          = in_encoder.transform(face_embedded.reshape(1, -1))\n        return X\n\n    def
+          face_svm_classifier(X):\n        yhat = svm_model.predict(X)\n        label
+          = yhat[0]\n        yhat_prob = svm_model.predict_proba(X)\n        probability
+          = round(yhat_prob[0][label], 2)\n        trainy = data[''arr_1'']\n        out_encoder
+          = LabelEncoder()\n        out_encoder.fit(trainy)\n        predicted_class_label
+          = out_encoder.inverse_transform(yhat)\n        label = predicted_class_label[0]\n        return
+          label, str(probability) \n    #----------------------------------------------------main
+          code      \n\n    app = Flask(__name__,template_folder=\"/templates\")\n\n    @app.route(''/'',
+          methods=[''GET'', ''POST''])\n    def index():\n        \"\"\"Video streaming
+          home page.\"\"\"\n        if request.method == ''POST'':\n            tb._SYMBOLIC_SCOPE.value
+          = True\n            print(\"redirect\")\n            return redirect(''att_list'')\n        return
+          render_template(''index.html'')      \n\n    def gen_frame():\n        \"\"\"Video
+          streaming generator function.\"\"\"\n        tb._SYMBOLIC_SCOPE.value =
+          True\n\n        mongo_host = \"mongodb://testUser:passwd@10.244.1.102:27017\"  #
+          uri\n        dbName = \"db1\"\n        collectionName = \"Attendence\"\n\n        myclient
+          = pymongo.MongoClient(mongo_host)  # conn\n        database = myclient[dbName]\n        collection
+          = database[collectionName]\n        dblist = myclient.list_database_names()\n        print(\"Connection
+          finished....\")\n\n        while cap:\n            frame = cap.read()        \n\n            result
+          = face_mtcnn_extractor(frame)\n\n            if result:\n\n                for
+          person in result:\n\n                    x1, y1, x2, y2, width, height =
+          face_localizer(person)\n\n                    X = face_preprocessor(frame,
+          x1, y1, x2, y2, required_size=(160, 160))\n\n                    label,
+          probability = face_svm_classifier(X)\n\n                    if float(probability)
+          >= 0.8:\n                        print(\" Person : {} , Probability : {}\".format(label,
+          probability))\n                        cv2.rectangle(frame, (x1, y1), (x2,
+          y2),(0, 255, 0), 2, cv2.FILLED)\n                        # 6. Add the detected
+          class label to the frame\n                        cv2.putText(frame, label+probability,
+          (x1, y1-20),cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 1)\n\n                        if
+          float(probability) > 0.9:\n                            label = str(label)\n                            #
+          ------------------[''name '', ''number'']\n                            label
+          = label.split(''-'')  # --------------------- split\n\n                            #
+          -------------------string >>> list\n                            label =
+          list(label)\n\n                            label_name = label[0]  # -------------------[''name'']\n\n                            label_num
+          = label[1]  # -------------------[''number''].\n\n                            Name
+          = str(label_name)\n\n                            Number = str(label_num)\n\n                            Acc
+          = float(probability)\n\n                            if dbName in dblist:\n\n                                mDictionary
+          = {\"Name\": Name,\n                                               \"date\":
+          getDateTime(), \"number\": Number, \"acc\": Acc}\n\n                                collection.insert_one(mDictionary)\n\n                                cursor
+          = collection.distinct(\"Name\")\n\n                                for item
+          in cursor:\n\n                                    repeating = collection.find_one({\"Name\":
+          Name})\n                                    result = collection.delete_many({\"Name\":
+          Name})\n                                    collection.insert_one(repeating)\n\n                            else:\n                                print(\"The
+          database does not exist.\")\n                    else:\n                        cv2.rectangle(frame,
+          (x1, y1), (x2, y2), (0, 0, 255), 2)\n\n                        cv2.putText(frame,
+          no_results, (x1, y1-20),cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 1)\n    #
+          ----------------------------------------------------\n            convert
+          = cv2.imencode(''.jpg'', frame)[1].tobytes()\n            yield (b''--frame\\r\\n''\n                   b''Content-Type:
+          image/jpeg\\r\\n\\r\\n'' + convert + b''\\r\\n'')  # concate frame one by
+          one and show result        \n\n    @app.route(''/video_feed'')\n    def
+          video_feed():\n        return Response(gen_frame(),mimetype=''multipart/x-mixed-replace;
+          boundary=frame'')        \n\n    @app.route(''/att_list'')\n    def list_attendence():\n\n        mongo_host
+          = \"mongodb://testUser:passwd@10.244.1.102:27017\"  # uri\n        dbName
+          = \"db1\"\n        collectionName = \"Attendence\"\n\n        myclient =
+          pymongo.MongoClient(mongo_host)  # conn\n        database = myclient[dbName]\n        collection
+          = database[collectionName]\n        dblist = myclient.list_database_names()\n        print(\"Connection
+          finished....\")\n\n        users = collection.find()\n        print(users)\n\n        return
+          render_template(\"att_list.html\", users=users)        \n\n    if __name__
+          == ''__main__'':\n        app.run(host=''0.0.0.0'', threaded=True)        \n\n    print(\"Suscess.....\")        \n    block4_end
+          = time.time()  \n    block4_diff = (block4_end-block4_start)/60\n    block4_time_str
+          = str(block4_diff)\n\n    return[block4_time_str]\n\nimport argparse\n_parser
+          = argparse.ArgumentParser(prog=''Facial recognition'', description='''')\n_parser.add_argument(\"--block3-time-str\",
+          dest=\"block3_time_str\", type=str, required=True, default=argparse.SUPPRESS)\n_parsed_args
+          = vars(_parser.parse_args())\n\n_outputs = facial_recognition(**_parsed_args)\n"],
+          "image": "mike0355/face-recognition-0523:latest"}}, "inputs": [{"name":
+          "block3_time_str", "type": "String"}], "name": "Facial recognition"}', pipelines.kubeflow.org/component_ref: '{}',
+        pipelines.kubeflow.org/arguments.parameters: '{"block3_time_str": "{{inputs.parameters.svm-training-block3_time_str}}"}'}
+  - name: feature-emb
+    container:
+      args: [--train-time-str1, '{{inputs.parameters.distributed-training-work1-train_time_str1}}',
+        --train-time-str2, '{{inputs.parameters.distributed-training-work2-train_time_str2}}',
+        --train-time-str3, '{{inputs.parameters.distributed-training-work3-train_time_str3}}',
+        '----output-paths', /tmp/outputs/block2_time_str/data]
+      command:
+      - sh
+      - -ec
+      - |
+        program_path=$(mktemp)
+        printf "%s" "$0" > "$program_path"
+        python3 -u "$program_path" "$@"
+      - "def feature_emb(train_time_str1,train_time_str2,train_time_str3):\n    from\
+        \ keras.models import load_model\n    #from tensorflow.keras.models import\
+        \ load_model\n    from numpy import savez_compressed, asarray, load, expand_dims\n\
+        \    import sys\n    import os\n    import tensorflow as tf\n    print( sys.version)\n\
+        \    sys.path.append(\"./\")\n    sys.path.append(\"/facenet-model\")\n  \
+        \  sys.path.append(\"/persist-log\")\n    sys.path.append(\"/configfile\"\
+        )\n    from triplet_training import create_base_network\n    from config import\
+        \ img_size, channel, classify, FREEZE_LAYERS, facenet_weight_path, faces_data_dir\n\
+        \    import time\n    import warnings\n    # ---------------------------------------\n\
+        \n    print(\"Import Suscess...\")\n\n    block2_start = time.time()\n\n \
+        \   faces_npz = \"faces_data.npz\"\n    #facenet_model =\"facenet-model/facenet_keras.h5\"\
+        \n\n    model_path = '/persist-log/test_model_0523.h5'\n\n    anchor_input\
+        \ = tf.keras.Input((img_size, img_size, channel,), name='anchor_input')\n\n\
+        \    Shared_DNN = create_base_network((img_size, img_size, channel), FREEZE_LAYERS,\
+        \ facenet_weight_path)\n\n    encoded_anchor = Shared_DNN(anchor_input)\n\n\
+        \    model = tf.keras.Model(inputs=anchor_input, outputs=encoded_anchor)\n\
+        \n    model.load_weights(model_path)\n\n    model.summary()\n\n    def get_embedding(model,\
+        \ face_pixels):\n\n        # scale pixel values\n        face_pixels = face_pixels.astype('float32')\n\
+        \n        mean, std = face_pixels.mean(), face_pixels.std()\n        face_pixels\
+        \ = (face_pixels - mean) / std \n\n        samples = expand_dims(face_pixels,\
+        \ axis=0)\n\n        yhat = model.predict(samples)\n\n        return yhat[0]\n\
+        \n    data = load(faces_npz)\n    trainX, trainy, testX, testy = data['arr_0'],\
+        \ data['arr_1'], data['arr_2'], data['arr_3']\n    print('Loaded: ', trainX.shape,\
+        \ trainy.shape, testX.shape, testy.shape)\n    #print(\"The testy is :\",\
+        \ testy)\n    # load the facenet model\n    #model = load_model(facenet_model)\n\
+        \    print('Facenet Model Loaded')\n    print(\"Embedding....\")\n    # -----------------------------------------------------------------------------------\
+        \ TrainX's  Facial Image feature .\n    newTrainX = list()\n    for face_pixels\
+        \ in trainX:\n        embedding = get_embedding(model, face_pixels)\n    \
+        \    newTrainX.append(embedding)\n\n    newTrainX = asarray(newTrainX)\n \
+        \   print(\"The train Image feature is:\", newTrainX)\n    print(\"The train\
+        \ Image feature size is:\", newTrainX.shape)\n    # -----------------------------------------------------------------------------------\
+        \ TestX's  Facial Image feature .\n\n    newTestX = list()\n    for face_pixels\
+        \ in testX:\n        embedding = get_embedding(model, face_pixels)\n     \
+        \   newTestX.append(embedding)\n    newTestX = asarray(newTestX)\n    print(\"\
+        The test Image feature is:\", newTestX)\n    print(\"The test Image feature\
+        \ size is:\", newTestX.shape)\n    # save arrays to one file in compressed\
+        \ format\n    savez_compressed(\"faces_embeddings\",\n                   \
+        \  newTrainX, trainy, newTestX, testy)\n\n    print(\"save suscess....\")\n\
+        \n    block2_end = time.time()\n\n    block2_time_diff = (block2_end - block2_start)/60\n\
+        \n    block2_time_str = str(block2_time_diff)\n\n    return[block2_time_str]\n\
+        \ndef _serialize_str(str_value: str) -> str:\n    if not isinstance(str_value,\
+        \ str):\n        raise TypeError('Value \"{}\" has type \"{}\" instead of\
+        \ str.'.format(str(str_value), str(type(str_value))))\n    return str_value\n\
+        \nimport argparse\n_parser = argparse.ArgumentParser(prog='Feature emb', description='')\n\
+        _parser.add_argument(\"--train-time-str1\", dest=\"train_time_str1\", type=str,\
+        \ required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"--train-time-str2\"\
+        , dest=\"train_time_str2\", type=str, required=True, default=argparse.SUPPRESS)\n\
+        _parser.add_argument(\"--train-time-str3\", dest=\"train_time_str3\", type=str,\
+        \ required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"----output-paths\"\
+        , dest=\"_output_paths\", type=str, nargs=1)\n_parsed_args = vars(_parser.parse_args())\n\
+        _output_files = _parsed_args.pop(\"_output_paths\", [])\n\n_outputs = feature_emb(**_parsed_args)\n\
+        \n_output_serializers = [\n    _serialize_str,\n\n]\n\nimport os\nfor idx,\
+        \ output_file in enumerate(_output_files):\n    try:\n        os.makedirs(os.path.dirname(output_file))\n\
+        \    except OSError:\n        pass\n    with open(output_file, 'w') as f:\n\
+        \        f.write(_output_serializers[idx](_outputs[idx]))\n"
+      image: mike0355/face-recognition-0523:latest
+      volumeMounts:
+      - {mountPath: /persist-log, name: face-detect-pvc}
+    inputs:
+      parameters:
+      - {name: distributed-training-work1-train_time_str1}
+      - {name: distributed-training-work2-train_time_str2}
+      - {name: distributed-training-work3-train_time_str3}
+      - {name: face-detect-pvc-name}
+    outputs:
+      parameters:
+      - name: feature-emb-block2_time_str
+        valueFrom: {path: /tmp/outputs/block2_time_str/data}
+      artifacts:
+      - {name: feature-emb-block2_time_str, path: /tmp/outputs/block2_time_str/data}
+    volumes:
+    - name: face-detect-pvc
+      persistentVolumeClaim: {claimName: '{{inputs.parameters.face-detect-pvc-name}}'}
+    metadata:
+      annotations: {pipelines.kubeflow.org/component_spec: '{"implementation": {"container":
+          {"args": ["--train-time-str1", {"inputValue": "train_time_str1"}, "--train-time-str2",
+          {"inputValue": "train_time_str2"}, "--train-time-str3", {"inputValue": "train_time_str3"},
+          "----output-paths", {"outputPath": "block2_time_str"}], "command": ["sh",
+          "-ec", "program_path=$(mktemp)\nprintf \"%s\" \"$0\" > \"$program_path\"\npython3
+          -u \"$program_path\" \"$@\"\n", "def feature_emb(train_time_str1,train_time_str2,train_time_str3):\n    from
+          keras.models import load_model\n    #from tensorflow.keras.models import
+          load_model\n    from numpy import savez_compressed, asarray, load, expand_dims\n    import
+          sys\n    import os\n    import tensorflow as tf\n    print( sys.version)\n    sys.path.append(\"./\")\n    sys.path.append(\"/facenet-model\")\n    sys.path.append(\"/persist-log\")\n    sys.path.append(\"/configfile\")\n    from
+          triplet_training import create_base_network\n    from config import img_size,
+          channel, classify, FREEZE_LAYERS, facenet_weight_path, faces_data_dir\n    import
+          time\n    import warnings\n    # ---------------------------------------\n\n    print(\"Import
+          Suscess...\")\n\n    block2_start = time.time()\n\n    faces_npz = \"faces_data.npz\"\n    #facenet_model
+          =\"facenet-model/facenet_keras.h5\"\n\n    model_path = ''/persist-log/test_model_0523.h5''\n\n    anchor_input
+          = tf.keras.Input((img_size, img_size, channel,), name=''anchor_input'')\n\n    Shared_DNN
+          = create_base_network((img_size, img_size, channel), FREEZE_LAYERS, facenet_weight_path)\n\n    encoded_anchor
+          = Shared_DNN(anchor_input)\n\n    model = tf.keras.Model(inputs=anchor_input,
+          outputs=encoded_anchor)\n\n    model.load_weights(model_path)\n\n    model.summary()\n\n    def
+          get_embedding(model, face_pixels):\n\n        # scale pixel values\n        face_pixels
+          = face_pixels.astype(''float32'')\n\n        mean, std = face_pixels.mean(),
+          face_pixels.std()\n        face_pixels = (face_pixels - mean) / std \n\n        samples
+          = expand_dims(face_pixels, axis=0)\n\n        yhat = model.predict(samples)\n\n        return
+          yhat[0]\n\n    data = load(faces_npz)\n    trainX, trainy, testX, testy
+          = data[''arr_0''], data[''arr_1''], data[''arr_2''], data[''arr_3'']\n    print(''Loaded:
+          '', trainX.shape, trainy.shape, testX.shape, testy.shape)\n    #print(\"The
+          testy is :\", testy)\n    # load the facenet model\n    #model = load_model(facenet_model)\n    print(''Facenet
+          Model Loaded'')\n    print(\"Embedding....\")\n    # -----------------------------------------------------------------------------------
+          TrainX''s  Facial Image feature .\n    newTrainX = list()\n    for face_pixels
+          in trainX:\n        embedding = get_embedding(model, face_pixels)\n        newTrainX.append(embedding)\n\n    newTrainX
+          = asarray(newTrainX)\n    print(\"The train Image feature is:\", newTrainX)\n    print(\"The
+          train Image feature size is:\", newTrainX.shape)\n    # -----------------------------------------------------------------------------------
+          TestX''s  Facial Image feature .\n\n    newTestX = list()\n    for face_pixels
+          in testX:\n        embedding = get_embedding(model, face_pixels)\n        newTestX.append(embedding)\n    newTestX
+          = asarray(newTestX)\n    print(\"The test Image feature is:\", newTestX)\n    print(\"The
+          test Image feature size is:\", newTestX.shape)\n    # save arrays to one
+          file in compressed format\n    savez_compressed(\"faces_embeddings\",\n                     newTrainX,
+          trainy, newTestX, testy)\n\n    print(\"save suscess....\")\n\n    block2_end
+          = time.time()\n\n    block2_time_diff = (block2_end - block2_start)/60\n\n    block2_time_str
+          = str(block2_time_diff)\n\n    return[block2_time_str]\n\ndef _serialize_str(str_value:
+          str) -> str:\n    if not isinstance(str_value, str):\n        raise TypeError(''Value
+          \"{}\" has type \"{}\" instead of str.''.format(str(str_value), str(type(str_value))))\n    return
+          str_value\n\nimport argparse\n_parser = argparse.ArgumentParser(prog=''Feature
+          emb'', description='''')\n_parser.add_argument(\"--train-time-str1\", dest=\"train_time_str1\",
+          type=str, required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"--train-time-str2\",
+          dest=\"train_time_str2\", type=str, required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"--train-time-str3\",
+          dest=\"train_time_str3\", type=str, required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"----output-paths\",
+          dest=\"_output_paths\", type=str, nargs=1)\n_parsed_args = vars(_parser.parse_args())\n_output_files
+          = _parsed_args.pop(\"_output_paths\", [])\n\n_outputs = feature_emb(**_parsed_args)\n\n_output_serializers
+          = [\n    _serialize_str,\n\n]\n\nimport os\nfor idx, output_file in enumerate(_output_files):\n    try:\n        os.makedirs(os.path.dirname(output_file))\n    except
+          OSError:\n        pass\n    with open(output_file, ''w'') as f:\n        f.write(_output_serializers[idx](_outputs[idx]))\n"],
+          "image": "mike0355/face-recognition-0523:latest"}}, "inputs": [{"name":
+          "train_time_str1", "type": "String"}, {"name": "train_time_str2", "type":
+          "String"}, {"name": "train_time_str3", "type": "String"}], "name": "Feature
+          emb", "outputs": [{"name": "block2_time_str", "type": "String"}]}', pipelines.kubeflow.org/component_ref: '{}',
+        pipelines.kubeflow.org/arguments.parameters: '{"train_time_str1": "{{inputs.parameters.distributed-training-work1-train_time_str1}}",
+          "train_time_str2": "{{inputs.parameters.distributed-training-work2-train_time_str2}}",
+          "train_time_str3": "{{inputs.parameters.distributed-training-work3-train_time_str3}}"}'}
+  - name: kserve-service
+    container:
+      args: [--log-folder, '{{inputs.parameters.svm-training-block3_time_str}}']
+      command:
+      - sh
+      - -ec
+      - |
+        program_path=$(mktemp)
+        printf "%s" "$0" > "$program_path"
+        python3 -u "$program_path" "$@"
+      - |
+        def Kserve_service(log_folder):
+            import subprocess
+            subprocess.run(["python", "-m", "sklearnserver", "--http_port", "8081", "--model_dir", "sklearnserver/sklearnserver/example_models/pkl/model"])
+
+        import argparse
+        _parser = argparse.ArgumentParser(prog='Kserve service', description='')
+        _parser.add_argument("--log-folder", dest="log_folder", type=str, required=True, default=argparse.SUPPRESS)
+        _parsed_args = vars(_parser.parse_args())
+
+        _outputs = Kserve_service(**_parsed_args)
+      image: mike0355/facial-rec-serve:latest
+      volumeMounts:
+      - {mountPath: /persist-log, name: face-detect-pvc}
+    inputs:
+      parameters:
+      - {name: face-detect-pvc-name}
+      - {name: svm-training-block3_time_str}
+    volumes:
+    - name: face-detect-pvc
+      persistentVolumeClaim: {claimName: '{{inputs.parameters.face-detect-pvc-name}}'}
+    metadata:
+      annotations: {pipelines.kubeflow.org/component_spec: '{"implementation": {"container":
+          {"args": ["--log-folder", {"inputValue": "log_folder"}], "command": ["sh",
+          "-ec", "program_path=$(mktemp)\nprintf \"%s\" \"$0\" > \"$program_path\"\npython3
+          -u \"$program_path\" \"$@\"\n", "def Kserve_service(log_folder):\n    import
+          subprocess\n    subprocess.run([\"python\", \"-m\", \"sklearnserver\", \"--http_port\",
+          \"8081\", \"--model_dir\", \"sklearnserver/sklearnserver/example_models/pkl/model\"])\n\nimport
+          argparse\n_parser = argparse.ArgumentParser(prog=''Kserve service'', description='''')\n_parser.add_argument(\"--log-folder\",
+          dest=\"log_folder\", type=str, required=True, default=argparse.SUPPRESS)\n_parsed_args
+          = vars(_parser.parse_args())\n\n_outputs = Kserve_service(**_parsed_args)\n"],
+          "image": "mike0355/facial-rec-serve:latest"}}, "inputs": [{"name": "log_folder",
+          "type": "String"}], "name": "Kserve service"}', pipelines.kubeflow.org/component_ref: '{}',
+        pipelines.kubeflow.org/arguments.parameters: '{"log_folder": "{{inputs.parameters.svm-training-block3_time_str}}"}'}
+  - name: load-data
+    container:
+      args: [--log-folder, /persist-log, '----output-paths', /tmp/outputs/runtime_string/data]
+      command:
+      - sh
+      - -ec
+      - |
+        program_path=$(mktemp)
+        printf "%s" "$0" > "$program_path"
+        python3 -u "$program_path" "$@"
+      - |
+        def load_data(log_folder):
+            import pickle
+            from numpy import savez_compressed, asarray, load, expand_dims
+            import numpy as np
+            from PIL import Image
+            from os.path import isdir
+            from os import listdir
+            import os
+            import time
+            import datetime
+            import warnings
+            #import detect_face
+            import tensorflow
+            from mtcnn_cv2 import MTCNN
+            import sys
+            print("import done...")
+            print(sys.version)
+            sys.path.append("./")
+
+            dataset_train = os.path.join("train/")
+            dataset_val = os.path.join("val/")
+
+            def extract_face(filename, required_size=(160, 160)):
+                # load image from file
+                image = Image.open(filename)
+                # convert to RGB, if needed
+                image = image.convert('RGB')
+                # convert to array
+                pixels = asarray(image)
+                # create the detector, using default weights
+                detector = MTCNN()
+                # detect faces in the image
+                results = detector.detect_faces(pixels)
+                print(results)
+                if len(results) != 0:
+                    # extract the bounding box from the first face
+                    x1, y1, width, height = results[0]['box']
+                    # bug fix
+                    x1, y1 = abs(x1), abs(y1)
+                    x2, y2 = x1 + width, y1 + height
+                    # extract the face
+                    face = pixels[y1:y2, x1:x2]
+                    # resize pixels to the model size
+                    image = Image.fromarray(face)
+                    image = image.resize(required_size)
+                    face_array = asarray(image)
+
+                else:
+
+                    pass
+
+                return face_array
+
+            def load_dataset(directory):
+
+                X = []
+                y = []
+                # enumerate all folders named with class labels
+                for subdir in listdir(directory):
+                    path = directory + subdir + '/'
+                    # skip any files that might be in the dir
+                    if not isdir(path):
+                        continue
+                    # load all faces in the subdirectory
+                    faces = load_faces(path)
+                    # create labels
+                    labels = [subdir for _ in range(len(faces))]
+                    print("loaded {} examples for class: {}".format(len(faces), subdir))
+                    X.extend(faces)
+                    y.extend(labels)
+
+                return asarray(X), asarray(y)
+
+            def load_faces(directory):
+
+                faces = []
+
+                for filename in listdir(directory):
+
+                    path = directory + filename
+                    try:
+                        face = extract_face(path)
+
+                    except:
+                        print("Wrong image:", filename)
+                        continue
+                    faces.append(face)
+
+                return faces
+
+            start_time = time.time()
+            trainX, trainy = load_dataset(dataset_train)
+            print("Training data set loaded")
+
+            testX, testy = load_dataset(dataset_val)  # load test dataset
+            print("Testing data set loaded")
+
+            # save arrays to one file in compressed format
+            savez_compressed("faces_data", trainX, trainy, testX, testy)
+            print("Load dataset complete....")
+            end_time = time.time()
+
+            runtime = (end_time - start_time)/60
+            print("Program time is :", runtime)
+            runtime_string = str(runtime)
+
+            return[runtime_string]
+
+        def _serialize_str(str_value: str) -> str:
+            if not isinstance(str_value, str):
+                raise TypeError('Value "{}" has type "{}" instead of str.'.format(str(str_value), str(type(str_value))))
+            return str_value
+
+        import argparse
+        _parser = argparse.ArgumentParser(prog='Load data', description='')
+        _parser.add_argument("--log-folder", dest="log_folder", type=str, required=True, default=argparse.SUPPRESS)
+        _parser.add_argument("----output-paths", dest="_output_paths", type=str, nargs=1)
+        _parsed_args = vars(_parser.parse_args())
+        _output_files = _parsed_args.pop("_output_paths", [])
+
+        _outputs = load_data(**_parsed_args)
+
+        _output_serializers = [
+            _serialize_str,
+
+        ]
+
+        import os
+        for idx, output_file in enumerate(_output_files):
+            try:
+                os.makedirs(os.path.dirname(output_file))
+            except OSError:
+                pass
+            with open(output_file, 'w') as f:
+                f.write(_output_serializers[idx](_outputs[idx]))
+      image: mike0355/face-recognition-0523:latest
+      volumeMounts:
+      - {mountPath: /persist-log, name: face-detect-pvc}
+    inputs:
+      parameters:
+      - {name: face-detect-pvc-name}
+    outputs:
+      parameters:
+      - name: load-data-runtime_string
+        valueFrom: {path: /tmp/outputs/runtime_string/data}
+      artifacts:
+      - {name: load-data-runtime_string, path: /tmp/outputs/runtime_string/data}
+    volumes:
+    - name: face-detect-pvc
+      persistentVolumeClaim: {claimName: '{{inputs.parameters.face-detect-pvc-name}}'}
+    metadata:
+      annotations: {pipelines.kubeflow.org/component_spec: '{"implementation": {"container":
+          {"args": ["--log-folder", {"inputValue": "log_folder"}, "----output-paths",
+          {"outputPath": "runtime_string"}], "command": ["sh", "-ec", "program_path=$(mktemp)\nprintf
+          \"%s\" \"$0\" > \"$program_path\"\npython3 -u \"$program_path\" \"$@\"\n",
+          "def load_data(log_folder):\n    import pickle\n    from numpy import savez_compressed,
+          asarray, load, expand_dims\n    import numpy as np\n    from PIL import
+          Image\n    from os.path import isdir\n    from os import listdir\n    import
+          os\n    import time\n    import datetime\n    import warnings\n    #import
+          detect_face\n    import tensorflow\n    from mtcnn_cv2 import MTCNN\n    import
+          sys\n    print(\"import done...\")\n    print(sys.version)\n    sys.path.append(\"./\")\n\n    dataset_train
+          = os.path.join(\"train/\")\n    dataset_val = os.path.join(\"val/\")\n\n    def
+          extract_face(filename, required_size=(160, 160)):\n        # load image
+          from file\n        image = Image.open(filename)\n        # convert to RGB,
+          if needed\n        image = image.convert(''RGB'')\n        # convert to
+          array\n        pixels = asarray(image)\n        # create the detector, using
+          default weights\n        detector = MTCNN()\n        # detect faces in the
+          image\n        results = detector.detect_faces(pixels)\n        print(results)\n        if
+          len(results) != 0:\n            # extract the bounding box from the first
+          face\n            x1, y1, width, height = results[0][''box'']\n            #
+          bug fix\n            x1, y1 = abs(x1), abs(y1)\n            x2, y2 = x1
+          + width, y1 + height\n            # extract the face\n            face =
+          pixels[y1:y2, x1:x2]\n            # resize pixels to the model size\n            image
+          = Image.fromarray(face)\n            image = image.resize(required_size)\n            face_array
+          = asarray(image)\n\n        else:\n\n            pass\n\n        return
+          face_array\n\n    def load_dataset(directory):\n\n        X = []\n        y
+          = []\n        # enumerate all folders named with class labels\n        for
+          subdir in listdir(directory):\n            path = directory + subdir + ''/''\n            #
+          skip any files that might be in the dir\n            if not isdir(path):\n                continue\n            #
+          load all faces in the subdirectory\n            faces = load_faces(path)\n            #
+          create labels\n            labels = [subdir for _ in range(len(faces))]\n            print(\"loaded
+          {} examples for class: {}\".format(len(faces), subdir))\n            X.extend(faces)\n            y.extend(labels)\n\n        return
+          asarray(X), asarray(y)\n\n    def load_faces(directory):\n\n        faces
+          = []\n\n        for filename in listdir(directory):\n\n            path
+          = directory + filename\n            try:\n                face = extract_face(path)\n\n            except:\n                print(\"Wrong
+          image:\", filename)\n                continue\n            faces.append(face)\n\n        return
+          faces\n\n    start_time = time.time()\n    trainX, trainy = load_dataset(dataset_train)\n    print(\"Training
+          data set loaded\")\n\n    testX, testy = load_dataset(dataset_val)  # load
+          test dataset\n    print(\"Testing data set loaded\")\n\n    # save arrays
+          to one file in compressed format\n    savez_compressed(\"faces_data\", trainX,
+          trainy, testX, testy)\n    print(\"Load dataset complete....\")\n    end_time
+          = time.time()\n\n    runtime = (end_time - start_time)/60\n    print(\"Program
+          time is :\", runtime)\n    runtime_string = str(runtime)\n\n    return[runtime_string]\n\ndef
+          _serialize_str(str_value: str) -> str:\n    if not isinstance(str_value,
+          str):\n        raise TypeError(''Value \"{}\" has type \"{}\" instead of
+          str.''.format(str(str_value), str(type(str_value))))\n    return str_value\n\nimport
+          argparse\n_parser = argparse.ArgumentParser(prog=''Load data'', description='''')\n_parser.add_argument(\"--log-folder\",
+          dest=\"log_folder\", type=str, required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"----output-paths\",
+          dest=\"_output_paths\", type=str, nargs=1)\n_parsed_args = vars(_parser.parse_args())\n_output_files
+          = _parsed_args.pop(\"_output_paths\", [])\n\n_outputs = load_data(**_parsed_args)\n\n_output_serializers
+          = [\n    _serialize_str,\n\n]\n\nimport os\nfor idx, output_file in enumerate(_output_files):\n    try:\n        os.makedirs(os.path.dirname(output_file))\n    except
+          OSError:\n        pass\n    with open(output_file, ''w'') as f:\n        f.write(_output_serializers[idx](_outputs[idx]))\n"],
+          "image": "mike0355/face-recognition-0523:latest"}}, "inputs": [{"name":
+          "log_folder", "type": "String"}], "name": "Load data", "outputs": [{"name":
+          "runtime_string", "type": "String"}]}', pipelines.kubeflow.org/component_ref: '{}',
+        pipelines.kubeflow.org/arguments.parameters: '{"log_folder": "/persist-log"}'}
+  - name: load-data-2
+    dag:
+      tasks:
+      - name: convert-to-triplet
+        template: convert-to-triplet
+        dependencies: [face-detect-pvc, load-data]
+        arguments:
+          parameters:
+          - {name: face-detect-pvc-name, value: '{{tasks.face-detect-pvc.outputs.parameters.face-detect-pvc-name}}'}
+          - {name: load-data-runtime_string, value: '{{tasks.load-data.outputs.parameters.load-data-runtime_string}}'}
+      - name: distributed-training-work1
+        template: distributed-training-work1
+        dependencies: [convert-to-triplet, face-detect-pvc]
+        arguments:
+          parameters:
+          - {name: convert-to-triplet-conv_time, value: '{{tasks.convert-to-triplet.outputs.parameters.convert-to-triplet-conv_time}}'}
+          - {name: face-detect-pvc-name, value: '{{tasks.face-detect-pvc.outputs.parameters.face-detect-pvc-name}}'}
+      - name: distributed-training-work2
+        template: distributed-training-work2
+        dependencies: [convert-to-triplet, face-detect-pvc]
+        arguments:
+          parameters:
+          - {name: convert-to-triplet-conv_time, value: '{{tasks.convert-to-triplet.outputs.parameters.convert-to-triplet-conv_time}}'}
+          - {name: face-detect-pvc-name, value: '{{tasks.face-detect-pvc.outputs.parameters.face-detect-pvc-name}}'}
+      - name: distributed-training-work3
+        template: distributed-training-work3
+        dependencies: [convert-to-triplet, face-detect-pvc]
+        arguments:
+          parameters:
+          - {name: convert-to-triplet-conv_time, value: '{{tasks.convert-to-triplet.outputs.parameters.convert-to-triplet-conv_time}}'}
+          - {name: face-detect-pvc-name, value: '{{tasks.face-detect-pvc.outputs.parameters.face-detect-pvc-name}}'}
+      - {name: face-detect-pvc, template: face-detect-pvc}
+      - name: facial-recognition
+        template: facial-recognition
+        dependencies: [face-detect-pvc, svm-training]
+        arguments:
+          parameters:
+          - {name: face-detect-pvc-name, value: '{{tasks.face-detect-pvc.outputs.parameters.face-detect-pvc-name}}'}
+          - {name: svm-training-block3_time_str, value: '{{tasks.svm-training.outputs.parameters.svm-training-block3_time_str}}'}
+      - name: feature-emb
+        template: feature-emb
+        dependencies: [distributed-training-work1, distributed-training-work2, distributed-training-work3,
+          face-detect-pvc]
+        arguments:
+          parameters:
+          - {name: distributed-training-work1-train_time_str1, value: '{{tasks.distributed-training-work1.outputs.parameters.distributed-training-work1-train_time_str1}}'}
+          - {name: distributed-training-work2-train_time_str2, value: '{{tasks.distributed-training-work2.outputs.parameters.distributed-training-work2-train_time_str2}}'}
+          - {name: distributed-training-work3-train_time_str3, value: '{{tasks.distributed-training-work3.outputs.parameters.distributed-training-work3-train_time_str3}}'}
+          - {name: face-detect-pvc-name, value: '{{tasks.face-detect-pvc.outputs.parameters.face-detect-pvc-name}}'}
+      - name: kserve-service
+        template: kserve-service
+        dependencies: [face-detect-pvc, svm-training]
+        arguments:
+          parameters:
+          - {name: face-detect-pvc-name, value: '{{tasks.face-detect-pvc.outputs.parameters.face-detect-pvc-name}}'}
+          - {name: svm-training-block3_time_str, value: '{{tasks.svm-training.outputs.parameters.svm-training-block3_time_str}}'}
+      - name: load-data
+        template: load-data
+        dependencies: [face-detect-pvc]
+        arguments:
+          parameters:
+          - {name: face-detect-pvc-name, value: '{{tasks.face-detect-pvc.outputs.parameters.face-detect-pvc-name}}'}
+      - name: svm-training
+        template: svm-training
+        dependencies: [face-detect-pvc, feature-emb]
+        arguments:
+          parameters:
+          - {name: face-detect-pvc-name, value: '{{tasks.face-detect-pvc.outputs.parameters.face-detect-pvc-name}}'}
+          - {name: feature-emb-block2_time_str, value: '{{tasks.feature-emb.outputs.parameters.feature-emb-block2_time_str}}'}
+  - name: svm-training
+    container:
+      args: [--block2-time-str, '{{inputs.parameters.feature-emb-block2_time_str}}',
+        '----output-paths', /tmp/outputs/block3_time_str/data]
+      command:
+      - sh
+      - -ec
+      - |
+        program_path=$(mktemp)
+        printf "%s" "$0" > "$program_path"
+        python3 -u "$program_path" "$@"
+      - |
+        def SVM_training(block2_time_str):
+            import pickle
+            from sklearn.svm import SVC
+            from sklearn.preprocessing import Normalizer
+            from sklearn.preprocessing import LabelEncoder
+            from sklearn.metrics import accuracy_score
+            from numpy import load
+            import numpy as np
+            import sys
+            import os
+            from os.path import isdir
+            from os import listdir
+            import time
+            import datetime
+            from keras.models import load_model
+            import warnings
+            from sklearn.metrics import classification_report
+            print("import done...")
+            block3_start = time.time()
+            #------------------------------------------------------
+            sys.path.append("./")
+
+            warnings.filterwarnings("ignore")
+
+            faces_embeddings = "faces_embeddings.npz"
+
+            svm_classifier = "SVM_classifier.pkl"
+
+            data = load(faces_embeddings)
+            trainX, trainy, testX, testy = data['arr_0'], data['arr_1'], data['arr_2'], data['arr_3']
+            print('Dataset: train=%d, test=%d' % (trainX.shape[0], testX.shape[0]))
+
+            in_encoder = Normalizer(norm='l2')
+            trainX = in_encoder.transform(trainX)
+            testX = in_encoder.transform(testX)
+
+            out_encoder = LabelEncoder()
+            out_encoder.fit(trainy)
+            trainy = out_encoder.transform(trainy)
+            testy = out_encoder.transform(testy)
+
+            model = SVC(kernel='linear', probability=True,C=1, max_iter=1000)
+            model.fit(trainX, trainy)
+
+            #----------------------------------------save model
+            filename = svm_classifier
+            pickle.dump(model, open(filename, 'wb'))
+
+            yhat_train = model.predict(trainX)
+            yhat_test = model.predict(testX)
+
+            #print(yhat_train)
+            #print(yhat_test)
+
+            #-----------------------------------------score
+            score_train = accuracy_score(trainy, yhat_train)
+            score_test = accuracy_score(testy, yhat_test)
+
+            print(classification_report(testy, yhat_test))
+
+            #----------------------------------------summarize
+            print('Accuracy: train=%.3f, test=%.3f' % (score_train * 100, score_test * 100))
+            block3_end = time.time()
+            block3_diff = (block3_end - block3_start)/60
+            block3_time_str = str(block3_diff)
+
+            return [block3_time_str]
+
+        def _serialize_str(str_value: str) -> str:
+            if not isinstance(str_value, str):
+                raise TypeError('Value "{}" has type "{}" instead of str.'.format(str(str_value), str(type(str_value))))
+            return str_value
+
+        import argparse
+        _parser = argparse.ArgumentParser(prog='SVM training', description='')
+        _parser.add_argument("--block2-time-str", dest="block2_time_str", type=str, required=True, default=argparse.SUPPRESS)
+        _parser.add_argument("----output-paths", dest="_output_paths", type=str, nargs=1)
+        _parsed_args = vars(_parser.parse_args())
+        _output_files = _parsed_args.pop("_output_paths", [])
+
+        _outputs = SVM_training(**_parsed_args)
+
+        _output_serializers = [
+            _serialize_str,
+
+        ]
+
+        import os
+        for idx, output_file in enumerate(_output_files):
+            try:
+                os.makedirs(os.path.dirname(output_file))
+            except OSError:
+                pass
+            with open(output_file, 'w') as f:
+                f.write(_output_serializers[idx](_outputs[idx]))
+      image: mike0355/face-recognition-0523:latest
+      volumeMounts:
+      - {mountPath: /persist-log, name: face-detect-pvc}
+    inputs:
+      parameters:
+      - {name: face-detect-pvc-name}
+      - {name: feature-emb-block2_time_str}
+    outputs:
+      parameters:
+      - name: svm-training-block3_time_str
+        valueFrom: {path: /tmp/outputs/block3_time_str/data}
+      artifacts:
+      - {name: svm-training-block3_time_str, path: /tmp/outputs/block3_time_str/data}
+    volumes:
+    - name: face-detect-pvc
+      persistentVolumeClaim: {claimName: '{{inputs.parameters.face-detect-pvc-name}}'}
+    metadata:
+      annotations: {pipelines.kubeflow.org/component_spec: '{"implementation": {"container":
+          {"args": ["--block2-time-str", {"inputValue": "block2_time_str"}, "----output-paths",
+          {"outputPath": "block3_time_str"}], "command": ["sh", "-ec", "program_path=$(mktemp)\nprintf
+          \"%s\" \"$0\" > \"$program_path\"\npython3 -u \"$program_path\" \"$@\"\n",
+          "def SVM_training(block2_time_str):\n    import pickle\n    from sklearn.svm
+          import SVC\n    from sklearn.preprocessing import Normalizer\n    from sklearn.preprocessing
+          import LabelEncoder\n    from sklearn.metrics import accuracy_score\n    from
+          numpy import load\n    import numpy as np\n    import sys\n    import os\n    from
+          os.path import isdir\n    from os import listdir\n    import time\n    import
+          datetime\n    from keras.models import load_model\n    import warnings\n    from
+          sklearn.metrics import classification_report\n    print(\"import done...\")\n    block3_start
+          = time.time()\n    #------------------------------------------------------\n    sys.path.append(\"./\")\n\n    warnings.filterwarnings(\"ignore\")\n\n    faces_embeddings
+          = \"faces_embeddings.npz\"\n\n    svm_classifier = \"SVM_classifier.pkl\"\n\n    data
+          = load(faces_embeddings)\n    trainX, trainy, testX, testy = data[''arr_0''],
+          data[''arr_1''], data[''arr_2''], data[''arr_3'']\n    print(''Dataset:
+          train=%d, test=%d'' % (trainX.shape[0], testX.shape[0]))\n\n    in_encoder
+          = Normalizer(norm=''l2'')\n    trainX = in_encoder.transform(trainX)\n    testX
+          = in_encoder.transform(testX)\n\n    out_encoder = LabelEncoder()\n    out_encoder.fit(trainy)\n    trainy
+          = out_encoder.transform(trainy)\n    testy = out_encoder.transform(testy)\n\n    model
+          = SVC(kernel=''linear'', probability=True,C=1, max_iter=1000)\n    model.fit(trainX,
+          trainy)\n\n    #----------------------------------------save model\n    filename
+          = svm_classifier\n    pickle.dump(model, open(filename, ''wb''))\n\n    yhat_train
+          = model.predict(trainX)\n    yhat_test = model.predict(testX)\n\n    #print(yhat_train)\n    #print(yhat_test)\n\n    #-----------------------------------------score\n    score_train
+          = accuracy_score(trainy, yhat_train)\n    score_test = accuracy_score(testy,
+          yhat_test)\n\n    print(classification_report(testy, yhat_test))\n\n    #----------------------------------------summarize\n    print(''Accuracy:
+          train=%.3f, test=%.3f'' % (score_train * 100, score_test * 100))\n    block3_end
+          = time.time()\n    block3_diff = (block3_end - block3_start)/60\n    block3_time_str
+          = str(block3_diff)\n\n    return [block3_time_str]\n\ndef _serialize_str(str_value:
+          str) -> str:\n    if not isinstance(str_value, str):\n        raise TypeError(''Value
+          \"{}\" has type \"{}\" instead of str.''.format(str(str_value), str(type(str_value))))\n    return
+          str_value\n\nimport argparse\n_parser = argparse.ArgumentParser(prog=''SVM
+          training'', description='''')\n_parser.add_argument(\"--block2-time-str\",
+          dest=\"block2_time_str\", type=str, required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"----output-paths\",
+          dest=\"_output_paths\", type=str, nargs=1)\n_parsed_args = vars(_parser.parse_args())\n_output_files
+          = _parsed_args.pop(\"_output_paths\", [])\n\n_outputs = SVM_training(**_parsed_args)\n\n_output_serializers
+          = [\n    _serialize_str,\n\n]\n\nimport os\nfor idx, output_file in enumerate(_output_files):\n    try:\n        os.makedirs(os.path.dirname(output_file))\n    except
+          OSError:\n        pass\n    with open(output_file, ''w'') as f:\n        f.write(_output_serializers[idx](_outputs[idx]))\n"],
+          "image": "mike0355/face-recognition-0523:latest"}}, "inputs": [{"name":
+          "block2_time_str", "type": "String"}], "name": "SVM training", "outputs":
+          [{"name": "block3_time_str", "type": "String"}]}', pipelines.kubeflow.org/component_ref: '{}',
+        pipelines.kubeflow.org/arguments.parameters: '{"block2_time_str": "{{inputs.parameters.feature-emb-block2_time_str}}"}'}
+  arguments:
+    parameters: []
+  serviceAccountName: pipeline-runner

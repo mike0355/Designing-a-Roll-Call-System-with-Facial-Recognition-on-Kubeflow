@@ -20,7 +20,8 @@ This project will implement the following items:
 ## FaceNet
 
 In this project, a algorithm called FaceNet is used to implement a face recognition on K8s. FaceNet presents a algorithm to train the features of Euclidean as a similarity between two face images, and output the distance as the similarity between two face images. In addition, we use triplet loss function to optimized the model.  
-Before training our data, three components are selected as triplets, as shown in **Figure1**, which include an anchor, a positive and a negative from the dataset. Since the model is trained in the Euclidean space, we assume that the distance between two points directly corresponds to the similarity between the two face images. As shown in **Figure2**. after training the model,the distance between the anchor and the positive will be reduced, and that between the anchor and the negative will be increased . 
+
+Before training our data, three components are selected as triplets, as shown in **Figure1**, which include an anchor, a positive and a negative from the dataset. Since the model is trained in the Euclidean space, we assume that the distance between two points directly corresponds to the similarity between the two face images. As shown in **Figure2**. after training the model,the distance between the anchor and the positive will be reduced, and that between the anchor and the negative will be increased . If you want to know more detailed FaceNet information, you can refer to [another FaceNet project](https://github.com/mike0355/k8s-facenet-distributed-training).
 <div align=center><img width="700" height="250" src="https://user-images.githubusercontent.com/51089749/180136665-e08f777e-2bee-47fa-850e-b22042dbeca5.png"/></div>
 <p align ="center"> <b>Figure1. Example of triplet set.</b></p>
 
@@ -57,10 +58,11 @@ At this part we will explain the function of each pods.
 
 * **face-detect-pvc:** This pod responsible for providing a common storage space for the pipeline, which can be used to store training files, image data files or weight files.
 
+**Tips:** Since this project is built in a virtual container environment, the distributed training part needs to make settings related to network ip. For details, please refer to this [link](https://github.com/mike0355/k8s-facenet-distributed-training/blob/main/step4_Distributed_training.md).
+
 * **Load data:** This pod is responsible for MTCNN face detection for each image data. If no face is detected, the data will be deleted and the face in the next image will continue to be detected. When all the data is detected After the measurement, the face area will be extracted according to the bounding box coordinates output by the face detection, and each face area will be stored in an empty array as an NPZ file.
 
 * **Convert to triplet:** This pod will convert the face data into triples, including Anchor, Positive and Negative data.
-
 * **Distributed training worker1:** This pod will be deployed under node1 and implement distributed training.
 * **Distributed training worker2:** This pod will be deployed under node2 and implement distributed training.
 * **Distributed training worker3:** This pod will be deployed under node3 and implement distributed training.
@@ -73,7 +75,13 @@ At this part we will explain the function of each pods.
 * **KServe:** This pod is a KServe model inference server. Users can freely input test data in the external environment to this inference server to make predictions. If the prediction is successful, the recognition results of the test images will be returned.
 
 # How to do?
-The development environment of this project is a multi-node Kubernetes cluster environment, and Kubeflow is used to assist in the development of the machine learning pipeline, so this project provides a complete Pipeline, Dataset and Dockerfile.If your development environment has already established a K8s multi-node cluster environment and Kubeflow, you can directly pull our file for use.
+The development environment of this project is a multi-node Kubernetes cluster environment, and Kubeflow is used to assist in the development of the machine learning pipeline, so this project provides a complete Pipeline, Dataset and Dockerfile.If your development environment has already established a K8s multi-node cluster environment and Kubeflow, you can directly pull our file for use，or if you want to install Kubernetes and deploy kubeflow, you can refer this [link](https://github.com/mike0355/k8s-facenet-distributed-training/blob/main/step1_Local_K8s_and_Kubeflow_setup.md).
+
+1.[Kubeflow pipeline code](https://github.com/mike0355/Designing-a-Roll-Call-System-with-Facial-Recognition-on-Kubeflow/blob/main/Facial-recognition-final-version.ipynb)
+
+2.[Kubeflow pipeline YAML file](https://github.com/mike0355/Designing-a-Roll-Call-System-with-Facial-Recognition-on-Kubeflow/blob/main/Facial-recognition-final-version.yaml)
+
+3.[Dockerfile file](https://github.com/mike0355/Designing-a-Roll-Call-System-with-Facial-Recognition-on-Kubeflow/blob/main/Dockerfile)
 
 ## Dataset
 This project collects 6,000 face images from ten classmates in the laboratory,as shown as **Figure7**. Under the training set folder and the test set folder, there will be folders of ten classmates, a total of ten categories，as shown as **Figure8**, in the training set data Each category in the folder contains 500 images of younger siblings, and the number of images in each category in the test set folder is 100 images.
@@ -86,6 +94,7 @@ This project collects 6,000 face images from ten classmates in the laboratory,as
 
 ## Dockerfile
 The project runs in a virtual container environment, and uses the Kubeflow machine learning framework to build a machine learning pipeline. In each stage of the pipeline, an environment that can run the program must be given. Therefore, an environment image file must be created by writing a Dockerfile .
+
 In this Dockerfile, it is mainly to install the packages that this project needs to use when executing the project. OpenCV package is used for image streaming and image processing, pymongo is used for MongoDB database connection and database command operations, Scikit-learn , Keras and Tensorflow are used for machine learning training model related purposes, Flask is used to implement web application suites, and Pillow is used for image processing related operations, such as face area extraction and pixel matrix conversion.**Figure9** is our project Dockerfile detailed content.The image data set collected by this project has been written into the virtual container through dockerfile, so there is no need to additionally collect and read image data when running this project.
 
 <div align=center><img width="500" height="350" src="https://user-images.githubusercontent.com/51089749/180903275-6e39ced4-52cf-44a8-83e7-911feedc917e.png"/></div>
@@ -116,11 +125,13 @@ In this Dockerfile, it is mainly to install the packages that this project needs
 <div align=center><img width="500" height="350" src="https://user-images.githubusercontent.com/51089749/180905482-9caf6592-2323-4faf-b73b-d4ec0531afc4.png"/></div>
 <p align ="center"> <b>Figure12. Home webpage </b></p>
 
-<div align=center><img width="500" height="70" src="https://user-images.githubusercontent.com/51089749/180906088-a8fc4e31-23ce-406f-b45d-12f4aa5c2898.png"/></div>
+<div align=center><img width="1200" height="200" src="https://user-images.githubusercontent.com/51089749/180906088-a8fc4e31-23ce-406f-b45d-12f4aa5c2898.png"/></div>
 <p align ="center"> <b>Figure13. Attendee list webpage  </b></p>
 
 ## Result: KServe
-KServe is a tool for automatic model deployment provided by the Kubeflow community. By deploying the model to the web API provided by Kubeflow to form a model inference server, users can use the python request package to send the prediction data to the HTTP protocol Post action. Into the model inference server, a Response will be returned after successful transmission, and the content of the Response is the prediction result after model inference. The input data of KServe in this project is the image data of 10 students, a total of 10 pieces of data. In order to verify whether the returned prediction results are consistent with the images, the 10 image data are used as the English names and student numbers of the 10 students. Make a name and send it to the inference model server to get the return result.
+KServe is a tool for automatic model deployment provided by the Kubeflow community. By deploying the model to the web API provided by Kubeflow to form a model inference server, users can use the python request package to send the prediction data to the HTTP protocol Post action. 
+
+Into the model inference server, a Response will be returned after successful transmission, and the content of the Response is the prediction result after model inference. The input data of KServe in this project is the image data of 10 students, a total of 10 pieces of data. In order to verify whether the returned prediction results are consistent with the images, the 10 image data are used as the English names and student numbers of the 10 students. Make a name and send it to the inference model server to get the return result.
 **Figure14** is KServe flow chart，when the predict data is successfully sent to the model server, the log of the model inference server will output messages such as delivery status，and the **Figure15** is KServe result.
 
 <div align=center><img width="700" height="350" src="https://user-images.githubusercontent.com/51089749/180907045-b6d3c833-7eab-4dc2-bfae-3499182c0801.png"/></div>

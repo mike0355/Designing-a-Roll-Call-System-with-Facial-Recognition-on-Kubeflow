@@ -59,7 +59,7 @@ At this part we will explain the function of each pods.
 
 * **Load data:** This pod is responsible for MTCNN face detection for each image data. If no face is detected, the data will be deleted and the face in the next image will continue to be detected. When all the data is detected After the measurement, the face area will be extracted according to the bounding box coordinates output by the face detection, and each face area will be stored in an empty array as an NPZ file.
 
-* **Convert to  triplet:** This pod will convert the face data into triples, including Anchor, Positive and Negative data.
+* **Convert to triplet:** This pod will convert the face data into triples, including Anchor, Positive and Negative data.
 
 * **Distributed training worker1:** This pod will be deployed under node1 and implement distributed training.
 * **Distributed training worker2:** This pod will be deployed under node2 and implement distributed training.
@@ -71,6 +71,76 @@ At this part we will explain the function of each pods.
 * **Facial recognition:** This pod is responsible for providing web services, uses the SVM model to identify each streamed face image, stores the results in MongoDB, and finally displays the attendee list on the front end of the web page.
 
 * **KServe:** This pod is a KServe model inference server. Users can freely input test data in the external environment to this inference server to make predictions. If the prediction is successful, the recognition results of the test images will be returned.
+
+# How to do?
+The development environment of this project is a multi-node Kubernetes cluster environment, and Kubeflow is used to assist in the development of the machine learning pipeline, so this project provides a complete Pipeline, Dataset and Dockerfile.If your development environment has already established a K8s multi-node cluster environment and Kubeflow, you can directly pull our file for use.
+
+## Dataset
+This project collects 6,000 face images from ten classmates in the laboratory,as shown as **Figure7**. Under the training set folder and the test set folder, there will be folders of ten classmates, a total of ten categories，as shown as **Figure8**, in the training set data Each category in the folder contains 500 images of younger siblings, and the number of images in each category in the test set folder is 100 images.
+
+<div align=center><img width="500" height="250" src="https://user-images.githubusercontent.com/51089749/180901085-2f496b68-6869-4df0-befd-3c339be161fc.png"/></div>
+<p align ="center"> <b>Figure7. Video data of ten younger classmates</b></p>
+
+<div align=center><img width="500" height="250" src="https://user-images.githubusercontent.com/51089749/180901696-784bc4f9-1227-42c7-bc3f-c6eb5e35b438.png"/></div>
+<p align ="center"> <b>Figure8. Ten classmates categories </b></p>
+
+## Dockerfile
+The project runs in a virtual container environment, and uses the Kubeflow machine learning framework to build a machine learning pipeline. In each stage of the pipeline, an environment that can run the program must be given. Therefore, an environment image file must be created by writing a Dockerfile .
+In this Dockerfile, it is mainly to install the packages that this project needs to use when executing the project. OpenCV package is used for image streaming and image processing, pymongo is used for MongoDB database connection and database command operations, Scikit-learn , Keras and Tensorflow are used for machine learning training model related purposes, Flask is used to implement web application suites, and Pillow is used for image processing related operations, such as face area extraction and pixel matrix conversion.**Figure9** is our project Dockerfile detailed content.The image data set collected by this project has been written into the virtual container through dockerfile, so there is no need to additionally collect and read image data when running this project.
+
+<div align=center><img width="500" height="350" src="https://user-images.githubusercontent.com/51089749/180903275-6e39ced4-52cf-44a8-83e7-911feedc917e.png"/></div>
+<p align ="center"> <b>Figure9. Dockerfile detailed content </b></p>
+
+
+
+## Result: Facial recognition result
+
+
+**Figure10** is our project facial recognition results. In practical applications, face detection is performed for streaming images. As long as a face is detected, a green bounding box will appear, and the recognition result and confidence level of the face will be displayed. On the contrary, a red bounding box will appear, which is displayed as "unknown".
+
+
+<div align=center><img width="500" height="350" src="https://user-images.githubusercontent.com/51089749/180903673-902be4dc-a8b9-4ce2-9a62-69f83f1e680c.png"/></div>
+<p align ="center"> <b>Figure10. Facial recognition result </b></p>
+
+
+## Result: MongoDB result
+**Figure11** is MongoDB database storage results.When the program performs face recognition, it will send the recognized face results to MongoDB for storage, so as to facilitate the display of the attendee list on the front end of the subsequent webpage.
+
+<div align=center><img width="500" height="350" src="https://user-images.githubusercontent.com/51089749/180904796-0f85a2ae-25ef-4b59-a93e-d190c7054363.png"/></div>
+<p align ="center"> <b>Figure11. MongoDB database storage result  </b></p>
+
+## Result: Webpage display
+**Figure12** is our project facial recognition webpage.On the home page, there will be a face recognition result area that is responsible for presenting continuous streaming images, and there will be a button object below this area. When user wants to confirm the status of the current attendees, he can press the button below the face recognition area, and when the jump page is triggered, the recognition results stored in the database will be displayed in the form of a list at the front of the webpage,as shown as **Figure13**.
+
+
+<div align=center><img width="500" height="350" src="https://user-images.githubusercontent.com/51089749/180905482-9caf6592-2323-4faf-b73b-d4ec0531afc4.png"/></div>
+<p align ="center"> <b>Figure12. Home webpage </b></p>
+
+<div align=center><img width="500" height="70" src="https://user-images.githubusercontent.com/51089749/180906088-a8fc4e31-23ce-406f-b45d-12f4aa5c2898.png"/></div>
+<p align ="center"> <b>Figure13. Attendee list webpage  </b></p>
+
+## Result: KServe
+KServe is a tool for automatic model deployment provided by the Kubeflow community. By deploying the model to the web API provided by Kubeflow to form a model inference server, users can use the python request package to send the prediction data to the HTTP protocol Post action. Into the model inference server, a Response will be returned after successful transmission, and the content of the Response is the prediction result after model inference. The input data of KServe in this project is the image data of 10 students, a total of 10 pieces of data. In order to verify whether the returned prediction results are consistent with the images, the 10 image data are used as the English names and student numbers of the 10 students. Make a name and send it to the inference model server to get the return result.
+**Figure14** is KServe flow chart，when the predict data is successfully sent to the model server, the log of the model inference server will output messages such as delivery status，and the **Figure15** is KServe result.
+
+<div align=center><img width="700" height="350" src="https://user-images.githubusercontent.com/51089749/180907045-b6d3c833-7eab-4dc2-bfae-3499182c0801.png"/></div>
+<p align ="center"> <b>Figure14. KServe flow chart  </b></p>
+
+
+<div align=center><img width="700" height="350" src="https://user-images.githubusercontent.com/51089749/180908430-6f91aeaf-db1c-4073-9074-44d8831e038e.png"/></div>
+<p align ="center"> <b>Figure15. KServe result  </b></p>
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

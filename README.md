@@ -1,7 +1,7 @@
 # Designing-a-Roll-Call-System-with-Facial-Recognition-on-Kubeflow
 This project combines classroom roll call system with virtual container technology, presents the whole project in the form of virtual services, and provides web services and model checking functions.
 
-## Goals
+## goals(for jenkin test)
 This project will implement the following items: 
 
 * A classroom roll call system combining MTCNN face detection and face recognition methods.
